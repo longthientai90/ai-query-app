@@ -1,0 +1,443 @@
+# Engineering Implementation Plan: mcp-query-server
+
+## Project Overview
+
+Build a **PostgreSQL MCP Tool Server** using **FastMCP** in Python 3.11+.
+
+This service sits in an AI Agent architecture as a pure database-access layer:
+
+```
+API Gateway
+  ↓
+Agent Core (LLM + Skills)
+  ↓
+MCP Query Server  ← THIS SERVICE
+  ↓
+PostgreSQL
+```
+
+> **Constraint**: The server MUST NOT contain any LLM or business logic. It only exposes safe, read-only database tools.
+
+---
+
+## Tech Stack
+
+| Layer | Technology |
+|---|---|
+| Runtime | Python 3.11+ |
+| MCP Framework | FastMCP |
+| DB Driver | asyncpg (preferred) or psycopg3 |
+| Config | Environment variables (.env) |
+| Container | Docker + docker-compose |
+
+---
+
+## 1. High-Level Architecture Diagram
+
+```
+┌─────────────────────────────────────────────────┐
+│                MCP Query Server                 │
+│                                                 │
+│  ┌──────────┐   ┌──────────┐   ┌────────────┐  │
+│  │  main.py │──▶│  tools/  │──▶│  security/ │  │
+│  │ FastMCP  │   │ query    │   │ validator  │  │
+│  │ entrypoint│  │ schema   │   │ limiter    │  │
+│  └──────────┘   │ explain  │   └────────────┘  │
+│                 └──────────┘         │          │
+│                      │               │          │
+│                 ┌──────────┐   ┌────────────┐  │
+│                 │    db/   │   │  config.py │  │
+│                 │ pool.py  │   │  utils/    │  │
+│                 └──────────┘   │  logging   │  │
+│                      │         └────────────┘  │
+└──────────────────────┼─────────────────────────┘
+                        ↓
+                  [ PostgreSQL ]
+```
+
+---
+
+## 2. Folder Structure
+
+```
+mcp-query-server/
+├── main.py                    # FastMCP entrypoint, registers all tools
+├── config.py                  # Env-based config (DB URL, limits, etc.)
+│
+├── db/
+│   ├── __init__.py
+│   └── pool.py                # Async connection pool (asyncpg)
+│
+├── security/
+│   ├── __init__.py
+│   ├── validator.py           # SQL statement whitelist/blacklist checks
+│   └── limiter.py             # LIMIT injection / enforcement
+│
+├── tools/
+│   ├── __init__.py
+│   ├── query.py               # postgres_query tool
+│   ├── schema.py              # postgres_get_schema tool
+│   └── explain.py             # postgres_explain tool
+│
+├── utils/
+│   ├── __init__.py
+│   ├── logging.py             # Structured logger setup
+│   └── timing.py              # Execution timer context manager
+│
+├── tests/
+│   ├── conftest.py            # Fixtures (mock pool, test DB)
+│   ├── test_validator.py
+│   ├── test_limiter.py
+│   ├── test_query.py
+│   ├── test_schema.py
+│   └── test_explain.py
+│
+├── Dockerfile
+├── docker-compose.yml
+├── .env.example
+├── requirements.txt
+└── README.md
+```
+
+### Module Responsibilities
+
+| Module | Responsibility |
+|---|---|
+| `main.py` | Boots FastMCP server, imports and registers all `@mcp.tool()` functions |
+| `config.py` | Reads env vars; exposes typed `Settings` object |
+| `db/pool.py` | Creates/manages asyncpg connection pool; exposes `get_pool()` |
+| `security/validator.py` | Parses and validates SQL: whitelist SELECT/WITH, reject DML, DDL, risky functions |
+| `security/limiter.py` | Detects missing LIMIT, injects default, clamps to hard max |
+| `tools/query.py` | Implements `postgres_query`: validates → limits → executes → returns rows |
+| `tools/schema.py` | Implements `postgres_get_schema`: queries information_schema / pg_catalog |
+| `tools/explain.py` | Implements `postgres_explain`: runs EXPLAIN [ANALYZE] safely |
+| `utils/logging.py` | Structured JSON logger; request correlation IDs |
+| `utils/timing.py` | `async with timer() as t` context manager; exposes `t.ms` |
+
+---
+
+## 3. MCP Tool Specifications
+
+### Tool 1: `postgres_query`
+
+```python
+@mcp.tool()
+async def postgres_query(
+    sql: str,
+    params: list | None = None,
+    max_rows: int | None = None
+) -> dict:
+    """
+    Execute a read-only SELECT query.
+    Returns: { rows, rowCount, columns, durationMs }
+    """
+```
+
+**Flow**: validate(sql) → enforce_limit(sql, max_rows) → execute → format response
+
+---
+
+### Tool 2: `postgres_get_schema`
+
+```python
+@mcp.tool()
+async def postgres_get_schema(
+    tables: list[str] | None = None,
+    include_indexes: bool = False
+) -> dict:
+    """
+    Introspect database schema.
+    Returns: { tables: [{ name, columns: [{ name, type, nullable, pk }], indexes? }] }
+    """
+```
+
+**Queries used**:
+- `information_schema.columns` → columns + types
+- `information_schema.table_constraints` + `key_column_usage` → primary keys
+- `pg_indexes` → index info (when `include_indexes=True`)
+
+---
+
+### Tool 3: `postgres_explain`
+
+```python
+@mcp.tool()
+async def postgres_explain(
+    sql: str,
+    params: list | None = None,
+    analyze: bool = False
+) -> dict:
+    """
+    Run EXPLAIN [ANALYZE] on a query.
+    Returns: { plan: [...], durationMs }
+    """
+```
+
+> **Note**: Even with `analyze=True`, the tool wraps execution in a **ROLLBACK** transaction to prevent side effects.
+
+---
+
+## 4. Security Strategy
+
+### Layer 1 — SQL Validator (`security/validator.py`)
+
+**Allow list** (statement must start with one of):
+- `SELECT`
+- `WITH` … followed by a `SELECT` (CTE)
+
+**Deny list** (reject if any keyword found):
+```
+INSERT, UPDATE, DELETE, DROP, ALTER, CREATE,
+TRUNCATE, COPY, GRANT, REVOKE, CALL, DO, EXECUTE
+```
+
+**Additional rejections**:
+- Multi-statement queries (`;` followed by non-whitespace)
+- SQL comments: `--` and `/* */`
+- Risky functions: `pg_read_file`, `pg_ls_dir`, `dblink`, `dblink_exec`, `lo_import`, `lo_export`, `copy_to`, `copy_from`
+
+**Implementation approach**:
+```python
+import sqlglot
+
+def validate_sql(sql: str) -> None:
+    # 1. Reject comments
+    # 2. Parse with sqlglot → raise if parse error
+    # 3. Check statement type is Select
+    # 4. Walk AST for denied functions
+    # 5. Raise SQLValidationError with reason
+```
+
+Use `sqlglot` for AST-based validation (more reliable than regex).
+
+---
+
+### Layer 2 — Limit Enforcer (`security/limiter.py`)
+
+```
+DEFAULT_LIMIT = 100     (configurable via env)
+MAX_LIMIT     = 1000    (configurable via env)
+```
+
+**Logic**:
+1. Parse SQL AST
+2. If no `LIMIT` clause → inject `LIMIT {DEFAULT_LIMIT}`
+3. If `LIMIT` exists and value > `MAX_LIMIT` → replace with `MAX_LIMIT`
+4. If `max_rows` param provided by caller → use `min(max_rows, MAX_LIMIT)`
+
+---
+
+### Layer 3 — Read-Only DB Role
+
+Document the following SQL grants for deployment:
+
+```sql
+-- Create dedicated read-only role
+CREATE ROLE mcp_readonly LOGIN PASSWORD 'strong_password';
+GRANT CONNECT ON DATABASE your_db TO mcp_readonly;
+GRANT USAGE ON SCHEMA public TO mcp_readonly;
+GRANT SELECT ON ALL TABLES IN SCHEMA public TO mcp_readonly;
+ALTER DEFAULT PRIVILEGES IN SCHEMA public
+  GRANT SELECT ON TABLES TO mcp_readonly;
+```
+
+Set `DATABASE_URL` in `.env` to use this role.
+
+---
+
+## 5. Configuration (`config.py`)
+
+```python
+from pydantic_settings import BaseSettings
+
+class Settings(BaseSettings):
+    DATABASE_URL: str
+    DB_POOL_MIN: int = 2
+    DB_POOL_MAX: int = 10
+    DEFAULT_LIMIT: int = 100
+    MAX_LIMIT: int = 1000
+    LOG_LEVEL: str = "INFO"
+    MCP_HOST: str = "0.0.0.0"
+    MCP_PORT: int = 8000
+
+    class Config:
+        env_file = ".env"
+```
+
+---
+
+## 6. Error Handling Strategy
+
+| Error Type | HTTP / MCP Response |
+|---|---|
+| `SQLValidationError` | Return structured error: `{ error: "validation", reason: "..." }` |
+| `LimitExceededError` | Return structured error: `{ error: "limit", reason: "..." }` |
+| `asyncpg.PostgresError` | Return `{ error: "db", message: "...", code: "..." }` |
+| Timeout | Return `{ error: "timeout", durationMs }` |
+| Unexpected | Log stack trace, return `{ error: "internal" }` |
+
+Never expose raw stack traces to the MCP caller.
+
+---
+
+## 7. Logging & Observability (`utils/logging.py`)
+
+- Structured JSON logging via `structlog` or `python-json-logger`
+- Each request logs: `tool`, `sql_hash` (sha256 prefix), `durationMs`, `rowCount`, `error` (if any)
+- Do NOT log the raw SQL in production (toggle via `LOG_SQL=true` env var)
+- Log level controlled by `LOG_LEVEL` env var
+
+---
+
+## 8. Testing Strategy
+
+### Unit Tests
+
+| Test File | What to Test |
+|---|---|
+| `test_validator.py` | Accept SELECT/WITH-SELECT; reject all DML, DDL, comments, risky funcs |
+| `test_limiter.py` | Inject default LIMIT, clamp max, respect caller max_rows |
+| `test_query.py` | Mock pool; verify tool returns correct shape |
+| `test_schema.py` | Mock pool; verify schema introspection queries are issued |
+| `test_explain.py` | Mock pool; verify EXPLAIN wrapping and ROLLBACK |
+
+### Integration Tests
+
+- Use `pytest` + `testcontainers` (spin up real PostgreSQL in Docker)
+- Test full flow: tool call → validation → DB → response
+
+### Commands
+
+```bash
+pytest tests/ -v                        # unit tests
+pytest tests/ -v --integration          # full integration (requires Docker)
+pytest tests/ --cov=. --cov-report=html # coverage
+```
+
+---
+
+## 9. Docker Local Development
+
+### `Dockerfile`
+
+```dockerfile
+FROM python:3.11-slim
+WORKDIR /app
+COPY requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
+COPY . .
+CMD ["python", "main.py"]
+```
+
+### `docker-compose.yml`
+
+```yaml
+version: "3.9"
+services:
+  postgres:
+    image: postgres:15
+    environment:
+      POSTGRES_DB: devdb
+      POSTGRES_USER: mcp_readonly
+      POSTGRES_PASSWORD: secret
+    ports:
+      - "5432:5432"
+
+  mcp-query-server:
+    build: .
+    env_file: .env
+    ports:
+      - "8000:8000"
+    depends_on:
+      - postgres
+```
+
+---
+
+## 10. Implementation Phases & Milestones
+
+### Phase 1 — Project Scaffold ✅
+- [ ] Init repo, `requirements.txt`, `.env.example`
+- [ ] Implement `config.py` with `Settings`
+- [ ] Implement `db/pool.py` with asyncpg pool
+- [ ] Bootstrap `main.py` with empty FastMCP app
+
+**Acceptance**: `python main.py` starts without error; DB pool connects.
+
+---
+
+### Phase 2 — Security Layer ✅
+- [ ] Implement `security/validator.py` with sqlglot AST validation
+- [ ] Implement `security/limiter.py` with LIMIT injection/clamping
+- [ ] Write unit tests for both modules (100% coverage target)
+
+**Acceptance**: All validator and limiter tests pass; known bad SQL is rejected.
+
+---
+
+### Phase 3 — MCP Tools ✅
+- [ ] Implement `tools/query.py` → `postgres_query`
+- [ ] Implement `tools/schema.py` → `postgres_get_schema`
+- [ ] Implement `tools/explain.py` → `postgres_explain`
+- [ ] Register all tools in `main.py`
+
+**Acceptance**: All three tools callable via MCP; correct response shape returned.
+
+---
+
+### Phase 4 — Observability ✅
+- [ ] Implement `utils/logging.py` with structured JSON logs
+- [ ] Implement `utils/timing.py` timer context manager
+- [ ] Add timing + logging to all tools
+
+**Acceptance**: Each tool request produces a structured JSON log line with `durationMs`.
+
+---
+
+### Phase 5 — Integration & Docker ✅
+- [ ] Write `Dockerfile` and `docker-compose.yml`
+- [ ] Run integration tests against real PostgreSQL
+- [ ] Document read-only role SQL grants in `README.md`
+
+**Acceptance**: `docker-compose up` starts both services; integration tests pass.
+
+---
+
+## Appendix: Schema Introspection Queries
+
+### Tables and Columns
+```sql
+SELECT
+  c.table_name,
+  c.column_name,
+  c.data_type,
+  c.is_nullable,
+  c.column_default
+FROM information_schema.columns c
+WHERE c.table_schema = 'public'
+  AND ($1::text[] IS NULL OR c.table_name = ANY($1))
+ORDER BY c.table_name, c.ordinal_position;
+```
+
+### Primary Keys
+```sql
+SELECT
+  tc.table_name,
+  kcu.column_name
+FROM information_schema.table_constraints tc
+JOIN information_schema.key_column_usage kcu
+  ON tc.constraint_name = kcu.constraint_name
+WHERE tc.constraint_type = 'PRIMARY KEY'
+  AND tc.table_schema = 'public';
+```
+
+### Indexes
+```sql
+SELECT
+  tablename,
+  indexname,
+  indexdef
+FROM pg_indexes
+WHERE schemaname = 'public'
+  AND ($1::text[] IS NULL OR tablename = ANY($1));
+```

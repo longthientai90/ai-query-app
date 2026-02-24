@@ -1,0 +1,117 @@
+You are Antigravity, an expert AI system architect.
+
+Create a detailed engineering implementation plan for a project called:
+
+"mcp-query-server"
+
+Goal
+------
+Build a PostgreSQL MCP Tool Server using FastMCP.
+
+This service is part of an AI agent architecture:
+
+API Gateway
+  ↓
+Agent Core (LLM + Skills)
+  ↓
+MCP Query Server (THIS SERVICE)
+  ↓
+PostgreSQL
+
+The server MUST NOT contain any LLM or business logic.
+It only exposes safe database tools.
+
+Tech stack
+-----------
+- Python 3.11+
+- FastMCP
+- PostgreSQL (psycopg or asyncpg)
+- Docker support
+- Environment-based configuration
+
+Required MCP tools
+-------------------
+
+1) postgres_query
+   Input:
+     - sql: string
+     - params: optional list
+     - max_rows: optional int
+   Output:
+     - rows
+     - rowCount
+     - columns
+     - durationMs
+
+2) postgres_get_schema
+   Input:
+     - tables: optional list
+     - include_indexes: optional bool
+   Output:
+     - schema summary including tables, columns, PK, indexes
+
+3) postgres_explain
+   Input:
+     - sql
+     - params
+     - analyze=false by default
+   Output:
+     - explain plan
+
+Security requirements (VERY IMPORTANT)
+--------------------------------------
+
+This server must be READ-ONLY.
+
+Enforce safety at multiple layers:
+
+1) SQL validation
+   - allow only SELECT or WITH...SELECT
+   - reject:
+     INSERT, UPDATE, DELETE, DROP, ALTER, CREATE,
+     TRUNCATE, COPY, GRANT, REVOKE, CALL, DO, EXECUTE
+   - reject multi-statement queries
+   - reject SQL comments (--, /* */)
+   - reject risky functions like pg_read_file, dblink etc.
+
+2) LIMIT enforcement
+   - default LIMIT = 100 if missing
+   - hard max LIMIT = 1000 (configurable)
+   - clamp or reject queries exceeding max
+
+3) Read-only DB role (document SQL grants)
+
+Architecture requirements
+--------------------------
+
+Design a clean folder structure:
+
+- main FastMCP entrypoint
+- tools folder
+- db connection layer
+- security layer (validator + limit)
+- config layer
+- utils (logging/timing)
+- tests
+
+Explain responsibilities of each module clearly.
+
+Deliverables in the PLAN
+-------------------------
+
+1. High-level architecture diagram
+2. Folder structure
+3. Step-by-step implementation phases
+4. Security strategy explanation
+5. SQL validation design
+6. Limit enforcement approach
+7. Schema introspection queries (information_schema / pg_catalog)
+8. Error handling strategy
+9. Logging and observability
+10. Testing strategy
+11. Docker local development flow
+
+Output format
+--------------
+Produce a practical engineering plan that Codex can implement directly.
+Include milestones and acceptance criteria.

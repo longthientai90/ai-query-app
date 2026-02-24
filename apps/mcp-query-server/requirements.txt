@@ -1,0 +1,9 @@
+fastmcp
+asyncpg
+sqlglot
+pydantic-settings
+structlog
+pytest
+pytest-asyncio
+testcontainers[postgresql]
+

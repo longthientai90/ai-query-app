@@ -1,0 +1,21 @@
+**/.terraform
+**/.terraform.lock.hcl
+**/terraform.tfstate*
+*.log
+__pycache__/
+
+.venv
+terraform-workspace
+.vscode/
+
+# env files (can opt-in for committing if needed)
+.env*
+
+scripts/*.txt
+
+fine-tune-pc/server-ai/output_qwen_14b/*
+fine-tune-pc/server-ai/output/*
+fine-tune-pc/server-ai/output_qwen_7b/*
+
+node_modules
+package-lock.json
