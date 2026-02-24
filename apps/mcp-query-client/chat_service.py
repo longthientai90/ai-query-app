@@ -78,13 +78,47 @@ class ChatService:
             {"sql": sql, "params": params, "max_rows": max_rows},
         )
         query_data = self.extract_tool_data(query_payload)
+        rows = query_data.get("rows", []) if isinstance(query_data, dict) else []
+        user_json = await self._build_user_json(question=question, rows=rows)
 
         return {
             "question": question,
             "sql": sql,
             "params": params,
             "result": query_data,
+            "answer": user_json,
         }
+
+    async def _build_user_json(self, question: str, rows: list[Any]) -> dict[str, Any]:
+        messages = [
+            {
+                "role": "system",
+                "content": (
+                    "You are a data response formatter. "
+                    "Return only valid JSON object with fields: "
+                    '{"summary":"...","rowCount":0,"items":[...]} '
+                    "The items must come from the provided rows only."
+                ),
+            },
+            {
+                "role": "user",
+                "content": (
+                    f"Question: {question}\n"
+                    f"Rows JSON: {json.dumps(rows, ensure_ascii=True)}"
+                ),
+            },
+        ]
+        completion = await self.client.chat.completions.create(
+            model=self.settings.AZURE_OPENAI_DEPLOYMENT,
+            messages=messages,
+            temperature=0,
+            response_format={"type": "json_object"},
+        )
+        content = completion.choices[0].message.content or "{}"
+        parsed = json.loads(content)
+        if not isinstance(parsed, dict):
+            raise ChatServiceError("Azure OpenAI did not return a JSON object for answer")
+        return parsed
 
     @staticmethod
     def extract_tool_data(payload: dict[str, Any]) -> dict[str, Any]:
@@ -105,4 +139,3 @@ class ChatService:
                         except json.JSONDecodeError:
                             pass
         return payload
-
