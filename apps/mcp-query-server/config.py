@@ -13,5 +13,6 @@ class Settings(BaseSettings):
     MCP_HOST: str = "0.0.0.0"
     MCP_PORT: int = 8000
     MCP_TRANSPORT: str = "http"
+    MCP_STATELESS_HTTP: bool = True
 
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")

@@ -1,7 +1,8 @@
 from __future__ import annotations
 
+import asyncio
 from contextlib import AsyncExitStack
-from typing import Any
+from typing import Any, Awaitable, Callable
 
 from mcp import ClientSession
 from mcp.client.streamable_http import streamablehttp_client
@@ -24,6 +25,7 @@ class MCPService:
         self.settings = settings or MCPClientSettings()
         self._stack: AsyncExitStack | None = None
         self._session: ClientSession | None = None
+        self._reconnect_lock = asyncio.Lock()
 
     @property
     def session(self) -> ClientSession:
@@ -51,17 +53,56 @@ class MCPService:
 
     async def stop(self) -> None:
         if self._stack is not None:
-            await self._stack.aclose()
+            try:
+                await self._stack.aclose()
+            except Exception:
+                # Connection can already be torn down when server restarts.
+                pass
         self._stack = None
         self._session = None
 
     async def list_tools(self) -> dict[str, Any]:
-        result = await self.session.list_tools()
+        result = await self._with_reconnect(lambda: self.session.list_tools())
         return result.model_dump(by_alias=True, exclude_none=True)
 
     async def call_tool(self, name: str, arguments: dict[str, Any]) -> dict[str, Any]:
-        result = await self.session.call_tool(name, arguments=arguments)
+        result = await self._with_reconnect(
+            lambda: self.session.call_tool(name, arguments=arguments)
+        )
         payload = result.model_dump(by_alias=True, exclude_none=True)
         if result.isError:
             raise MCPServiceError(f"Tool call failed: {payload}")
         return payload
+
+    async def _with_reconnect(self, operation: Callable[[], Awaitable[Any]]) -> Any:
+        try:
+            return await operation()
+        except Exception as exc:
+            if not self._is_connection_error(exc):
+                raise
+
+        async with self._reconnect_lock:
+            await self.stop()
+            await self.start()
+        return await operation()
+
+    @staticmethod
+    def _is_connection_error(exc: Exception) -> bool:
+        message = str(exc).lower()
+        keywords = (
+            "connection reset",
+            "forcibly closed",
+            "server disconnected",
+            "broken resource",
+            "closed resource",
+            "connection closed",
+            "stream closed",
+            "readerror",
+            "connecterror",
+            "session not found",
+            "404",
+            "not found",
+        )
+        return any(keyword in message for keyword in keywords) or isinstance(
+            exc, (ConnectionError, ConnectionResetError, BrokenPipeError)
+        )

@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import asyncio
+import sys
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
@@ -8,6 +10,9 @@ from api_chat import router as chat_router
 from api_tool import router as tool_router
 from chat_service import ChatService
 from mcp_service import MCPService
+
+if sys.platform == "win32":
+    asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
 
 
 @asynccontextmanager

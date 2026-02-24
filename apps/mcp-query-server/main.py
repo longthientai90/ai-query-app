@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import asyncio
+import sys
 from contextlib import asynccontextmanager
 
 from fastmcp import FastMCP
@@ -8,6 +10,9 @@ from config import Settings
 from db.pool import close_pool, init_pool
 from tools import register_explain_tool, register_query_tool, register_schema_tool
 from utils.logging import get_logger, setup_logging
+
+if sys.platform == "win32":
+    asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
 
 settings = Settings()
 setup_logging(settings.LOG_LEVEL)
@@ -36,11 +41,16 @@ register_explain_tool(mcp, settings=settings, logger=logger, log_sql=settings.LO
 def main() -> None:
     transport = settings.MCP_TRANSPORT.lower()
     if transport == "http":
-        mcp.run(transport="http", host=settings.MCP_HOST, port=settings.MCP_PORT)
+        mcp.run(
+            transport="http",
+            host=settings.MCP_HOST,
+            port=settings.MCP_PORT,
+            path="/mcp",
+            stateless_http=settings.MCP_STATELESS_HTTP,
+        )
     else:
         mcp.run(transport=transport)
 
 
 if __name__ == "__main__":
     main()
-
