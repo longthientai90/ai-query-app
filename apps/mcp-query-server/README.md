@@ -6,7 +6,7 @@ PostgreSQL MCP Tool Server built with FastMCP. This service is intentionally rea
 
 ```bash
 python -m venv .venv
-.venv/bin/activate
+.venv\Scripts\Activate
 pip install -r requirements.txt
 cp .env.example .env
 python main.py

@@ -1,0 +1,85 @@
+# Engineering Implementation Plan: mcp-query-client
+
+## Project Overview
+
+Build an **MCP Client App** using **FastAPI** to test the `mcp-query-server`. 
+The source code must be placed in the `apps/mcp-query-client` folder.
+
+This application will act as an API Gateway/Client that connects to the `mcp-query-server` (using the official MCP Python SDK) and exposes REST API endpoints (over port 8080) to test the database tools.
+
+## Tech Stack
+- **Python 3.11+**
+- **FastAPI** (Web framework)
+- **Uvicorn** (ASGI server)
+- **`mcp`** (Official Model Context Protocol Python SDK)
+- **Pydantic** (Data validation)
+
+## Application Settings
+- **Port:** 8080
+- **Host:** 0.0.0.0
+
+---
+
+## Folder Structure
+```text
+apps/mcp-query-client/
+├── main.py              # FastAPI application, lifespan, and routes
+├── mcp_service.py       # MCP Client connection management (ClientSession)
+├── schemas.py           # Pydantic models for requests and responses
+├── requirements.txt     # Python dependencies
+└── README.md            # Execution instructions
+```
+
+---
+
+## Implementation Details
+
+### 1. `mcp_service.py` (MCP Client Hook)
+Manage the lifecycle of the MCP connection:
+- Use `mcp.client.stdio.stdio_client` to connect to the MCP server as a subprocess.
+- The default command parameter to run the server should be compatible with standard Python execution (e.g., `python ../mcp-query-server/main.py`). Consider allowing this to be configurable via environment variables (`MCP_SERVER_CMD` or similar).
+- Wrap this in an async context or class to provide an initialized `ClientSession`. Note that MCP client initialization requires handling the `initialize()` sequence.
+
+### 2. `schemas.py` (Validations)
+Define Pydantic structures for the APIs based on the `mcp-query-server` tools:
+- `QueryRequest`: 
+  - `sql`: str
+  - `params`: list | None = None
+  - `max_rows`: int | None = None
+- `SchemaRequest`: 
+  - `tables`: list[str] | None = None
+  - `include_indexes`: bool = False
+- `ExplainRequest`: 
+  - `sql`: str
+  - `params`: list | None = None
+  - `analyze`: bool = False
+
+### 3. `main.py` (FastAPI Endpoints)
+Configure FastAPI with a lifespan context to start/stop the MCP client alongside the API:
+
+**Endpoints to implement:**
+- `GET /health` : Returns `{ "status": "ok" }`.
+- `GET /tools` : Calls `session.list_tools()` and returns the available MCP tools.
+- `POST /query` : Accepts `QueryRequest`, calls `postgres_query` via `session.call_tool()`.
+- `POST /schema` : Accepts `SchemaRequest`, calls `postgres_get_schema` via `session.call_tool()`.
+- `POST /explain` : Accepts `ExplainRequest`, calls `postgres_explain` via `session.call_tool()`.
+
+> **Note on error handling:** Map any MCP connection errors or tool execution errors (e.g. `isError=True` in the MCP result) into appropriate FastAPI `HTTPException` responses (e.g., 400 or 500).
+
+### 4. `requirements.txt`
+Ensure the file contains the necessary packages:
+```text
+fastapi
+uvicorn
+mcp
+pydantic
+pydantic-settings
+```
+
+---
+
+## Deliverables for Codex
+1. Initialize the directory `apps/mcp-query-client`.
+2. Generate all the files listed in the folder structure.
+3. Write clean, firmly typed Python code.
+4. Add concise instructions in `README.md` to start the server via `uvicorn main:app --host 0.0.0.0 --port 8080 --reload`.

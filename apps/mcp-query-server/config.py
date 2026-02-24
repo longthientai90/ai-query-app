@@ -12,5 +12,6 @@ class Settings(BaseSettings):
     LOG_SQL: bool = False
     MCP_HOST: str = "0.0.0.0"
     MCP_PORT: int = 8000
+    MCP_TRANSPORT: str = "http"
 
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")

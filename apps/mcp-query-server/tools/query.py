@@ -21,6 +21,7 @@ def register_query_tool(mcp, settings: Settings, logger, log_sql: bool = False) 
     ) -> dict[str, Any]:
         async with timer() as t:
             try:
+                logger.info("tool_query_request", tool="postgres_query", sql=sql, params=params, max_rows=max_rows)
                 # 1) Validate SQL safety.
                 validate_sql(sql)
                 # 2) Enforce row cap by normalizing/injecting LIMIT.
