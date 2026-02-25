@@ -37,6 +37,8 @@ docker run --rm -p 8080:8080 --env-file ./apps/api-gateway/.env api-gateway
 - `API_GATEWAY_HOST` (default: `0.0.0.0`)
 - `API_GATEWAY_PORT` (default: `8000`)
 - `API_GATEWAY_CORS_ORIGINS` (default: `*`)
+- `OTEL_EXPORTER_OTLP_ENDPOINT` (example: `http://otel-collector:4318`)
+- `OTEL_EXPORTER_OTLP_PROTOCOL` (recommended: `http/protobuf`)
 
 ## Endpoint
 

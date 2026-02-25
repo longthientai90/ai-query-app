@@ -7,6 +7,10 @@ from typing import Any
 
 import httpx
 
+from telemetry import get_tracer
+
+tracer = get_tracer(__name__)
+
 
 class AgentCoreClientError(RuntimeError):
     def __init__(self, *, status_code: int, detail: str) -> None:
@@ -38,26 +42,43 @@ class AgentCoreClient:
             "max_rows": max_rows,
             "session_id": session_id,
         }
-        try:
-            response = await self.client.post(self.handle_path, json=payload)
-        except httpx.TimeoutException as exc:
-            raise AgentCoreClientError(status_code=504, detail="Timed out while calling agent-core") from exc
-        except httpx.HTTPError as exc:
-            raise AgentCoreClientError(status_code=502, detail=f"Failed to reach agent-core: {exc}") from exc
+        with tracer.start_as_current_span("gateway.agent_core.http_call") as span:
+            span.set_attribute("upstream.base_url", self.base_url)
+            span.set_attribute("upstream.path", self.handle_path)
+            span.set_attribute("question.length", len(question))
+            if max_rows is not None:
+                span.set_attribute("max_rows", max_rows)
 
-        if response.status_code >= 400:
-            detail = _extract_error_detail(response)
-            if 400 <= response.status_code < 500:
-                raise AgentCoreClientError(status_code=response.status_code, detail=detail)
-            raise AgentCoreClientError(status_code=502, detail=f"Upstream agent-core error: {detail}")
+            try:
+                response = await self.client.post(self.handle_path, json=payload)
+            except httpx.TimeoutException as exc:
+                span.set_attribute("error", True)
+                span.set_attribute("error.type", "TimeoutException")
+                raise AgentCoreClientError(status_code=504, detail="Timed out while calling agent-core") from exc
+            except httpx.HTTPError as exc:
+                span.set_attribute("error", True)
+                span.set_attribute("error.type", type(exc).__name__)
+                raise AgentCoreClientError(status_code=502, detail=f"Failed to reach agent-core: {exc}") from exc
 
-        try:
-            parsed = response.json()
-        except json.JSONDecodeError as exc:
-            raise AgentCoreClientError(status_code=502, detail="agent-core returned invalid JSON") from exc
-        if not isinstance(parsed, dict):
-            raise AgentCoreClientError(status_code=502, detail="agent-core response must be a JSON object")
-        return parsed
+            span.set_attribute("http.status_code", response.status_code)
+            if response.status_code >= 400:
+                detail = _extract_error_detail(response)
+                span.set_attribute("error", True)
+                if 400 <= response.status_code < 500:
+                    raise AgentCoreClientError(status_code=response.status_code, detail=detail)
+                raise AgentCoreClientError(status_code=502, detail=f"Upstream agent-core error: {detail}")
+
+            try:
+                parsed = response.json()
+            except json.JSONDecodeError as exc:
+                span.set_attribute("error", True)
+                span.set_attribute("error.type", "JSONDecodeError")
+                raise AgentCoreClientError(status_code=502, detail="agent-core returned invalid JSON") from exc
+            if not isinstance(parsed, dict):
+                span.set_attribute("error", True)
+                span.set_attribute("error.type", "InvalidResponseShape")
+                raise AgentCoreClientError(status_code=502, detail="agent-core response must be a JSON object")
+            return parsed
 
 
 def _extract_error_detail(response: httpx.Response) -> str:

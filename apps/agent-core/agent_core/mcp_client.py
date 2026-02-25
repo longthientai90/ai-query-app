@@ -8,12 +8,16 @@ from typing import Any, Awaitable, Callable
 
 from mcp import ClientSession
 from mcp.client.streamable_http import streamablehttp_client
+from opentelemetry import trace
 
 from .settings import AgentCoreSettings
 
 
 class MCPClientError(RuntimeError):
     pass
+
+
+tracer = trace.get_tracer(__name__)
 
 
 class MCPClient:
@@ -66,11 +70,14 @@ class MCPClient:
 
     async def call_tool(self, name: str, arguments: dict[str, Any]) -> dict[str, Any]:
         """Execute one tool call and surface MCP error payloads as exceptions."""
-        result = await self._with_reconnect(lambda: self.session.call_tool(name, arguments=arguments))
-        payload = result.model_dump(by_alias=True, exclude_none=True)
-        if result.isError:
-            raise MCPClientError(f"Tool call failed: {payload}")
-        return payload
+        with tracer.start_as_current_span("agent.mcp.call_tool") as span:
+            span.set_attribute("mcp.tool.name", name)
+            result = await self._with_reconnect(lambda: self.session.call_tool(name, arguments=arguments))
+            payload = result.model_dump(by_alias=True, exclude_none=True)
+            if result.isError:
+                span.set_attribute("error", True)
+                raise MCPClientError(f"Tool call failed: {payload}")
+            return payload
 
     async def _with_reconnect(self, operation: Callable[[], Awaitable[Any]]) -> Any:
         """Retry once after reconnect if a connection-level failure is detected."""

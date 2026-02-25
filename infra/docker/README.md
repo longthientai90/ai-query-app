@@ -5,8 +5,10 @@ This folder contains a compose setup for:
 - `mcp-query-server`
 - `agent-core`
 - `api-gateway`
+- `otel-collector`
+- `jaeger`
 
-PostgreSQL is intentionally not included.
+Optional local PostgreSQL container is available behind profile `db`.
 
 ## Prerequisites
 
@@ -32,6 +34,12 @@ From repo root:
 docker compose -f infra/docker/docker-compose.yml up --build -d
 ```
 
+To also start local PostgreSQL:
+
+```bash
+docker compose -f infra/docker/docker-compose.yml --profile db up --build -d
+```
+
 ## Stop
 
 ```bash
@@ -43,3 +51,5 @@ docker compose -f infra/docker/docker-compose.yml down
 - `api-gateway`: `8080`
 - `agent-core`: `8100`
 - `mcp-query-server`: `8000`
+- `otel-collector`: `4317` (gRPC), `4318` (HTTP)
+- `jaeger-ui`: `16686` (http://localhost:16686)

@@ -19,3 +19,6 @@ fine-tune-pc/server-ai/output_qwen_7b/*
 
 node_modules
 package-lock.json
+
+.env
+.env/*

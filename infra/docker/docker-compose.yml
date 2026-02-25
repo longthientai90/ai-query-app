@@ -10,11 +10,17 @@ services:
       MCP_HOST: 0.0.0.0
       MCP_PORT: 8000
       MCP_TRANSPORT: http
+      OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector:4318
+      OTEL_EXPORTER_OTLP_PROTOCOL: http/protobuf
+      OTEL_TRACES_SAMPLER: always_on
+      OTEL_SERVICE_NAME: mcp-query-server
     ports:
       - "8000:8000"
     restart: unless-stopped
     extra_hosts:
       - "host.docker.internal:host-gateway"
+    depends_on:
+      - otel-collector
 
   agent-core:
     build:
@@ -28,8 +34,13 @@ services:
       AGENT_CORE_PORT: 8100
       MCP_SERVER_TRANSPORT: http
       MCP_SERVER_URL: http://mcp-query-server:8000/mcp
+      OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector:4318
+      OTEL_EXPORTER_OTLP_PROTOCOL: http/protobuf
+      OTEL_TRACES_SAMPLER: always_on
+      OTEL_SERVICE_NAME: agent-core
     depends_on:
       - mcp-query-server
+      - otel-collector
     ports:
       - "8100:8100"
     restart: unless-stopped
@@ -46,15 +57,43 @@ services:
       API_GATEWAY_PORT: 8080
       AGENT_CORE_BASE_URL: http://agent-core:8100
       AGENT_CORE_HANDLE_PATH: /agent/handle
+      OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector:4318
+      OTEL_EXPORTER_OTLP_PROTOCOL: http/protobuf
+      OTEL_TRACES_SAMPLER: always_on
+      OTEL_SERVICE_NAME: api-gateway
     depends_on:
       - agent-core
+      - otel-collector
     ports:
       - "8080:8080"
+    restart: unless-stopped
+
+  otel-collector:
+    image: otel/opentelemetry-collector-contrib:0.117.0
+    container_name: otel-collector
+    command: ["--config=/etc/otelcol/config.yaml"]
+    volumes:
+      - ./otel-collector-config.yaml:/etc/otelcol/config.yaml:ro
+    depends_on:
+      - jaeger
+    ports:
+      - "4317:4317"
+      - "4318:4318"
+    restart: unless-stopped
+
+  jaeger:
+    image: jaegertracing/all-in-one:1.65.0
+    container_name: jaeger
+    environment:
+      COLLECTOR_OTLP_ENABLED: "true"
+    ports:
+      - "16686:16686"
     restart: unless-stopped
 
   postgres:
     image: postgres:16.11
     container_name: postgres_16
+    profiles: ["db"]
 
     environment:
       POSTGRES_USER: cmicadmin

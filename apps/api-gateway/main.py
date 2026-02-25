@@ -11,6 +11,7 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from agent_core_client import AgentCoreClient
 from api_chat import router as chat_router
+from telemetry import setup_telemetry
 
 if sys.platform == "win32":
     asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
@@ -56,6 +57,7 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(title="api-gateway", lifespan=lifespan)
+setup_telemetry(app=app, service_name="api-gateway")
 app.add_middleware(
     CORSMiddleware,
     allow_origins=settings.cors_origins,

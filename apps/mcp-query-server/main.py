@@ -5,9 +5,13 @@ import sys
 from contextlib import asynccontextmanager
 
 from fastmcp import FastMCP
+from opentelemetry.instrumentation.asgi import OpenTelemetryMiddleware
+from starlette.middleware import Middleware
+import uvicorn
 
 from config import Settings
 from db.pool import close_pool, init_pool
+from telemetry import setup_telemetry
 from tools import register_explain_tool, register_query_tool, register_schema_tool
 from utils.logging import get_logger, setup_logging
 
@@ -17,6 +21,7 @@ if sys.platform == "win32":
 settings = Settings()
 setup_logging(settings.LOG_LEVEL)
 logger = get_logger("mcp_query_server")
+setup_telemetry(service_name="mcp-query-server")
 
 
 @asynccontextmanager
@@ -41,12 +46,16 @@ register_explain_tool(mcp, settings=settings, logger=logger, log_sql=settings.LO
 def main() -> None:
     transport = settings.MCP_TRANSPORT.lower()
     if transport == "http":
-        mcp.run(
-            transport="http",
-            host=settings.MCP_HOST,
-            port=settings.MCP_PORT,
+        app = mcp.http_app(
             path="/mcp",
             stateless_http=settings.MCP_STATELESS_HTTP,
+            middleware=[Middleware(OpenTelemetryMiddleware)],
+            transport="http",
+        )
+        uvicorn.run(
+            app,
+            host=settings.MCP_HOST,
+            port=settings.MCP_PORT,
         )
     else:
         mcp.run(transport=transport)

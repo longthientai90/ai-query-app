@@ -7,6 +7,8 @@ import time
 import uuid
 from typing import Any
 
+from opentelemetry import trace
+
 from .llm_client import LLMClient, LLMClientError
 from .mcp_client import MCPClient, MCPClientError
 from .models import SkillDefinition
@@ -17,6 +19,9 @@ from .skill_loader import SkillLoader, SkillLoaderError
 
 class AgentRuntimeError(RuntimeError):
     pass
+
+
+tracer = trace.get_tracer(__name__)
 
 
 class Agent:
@@ -71,52 +76,62 @@ class Agent:
         session_id: str | None = None,
     ) -> dict[str, Any]:
         """Run one end-to-end request: route -> execute skill flow -> return answer."""
-        if not self._started:
-            await self.start()
-        if not question.strip():
-            raise AgentRuntimeError("Question cannot be empty")
+        with tracer.start_as_current_span("agent.handle") as span:
+            span.set_attribute("question.length", len(question))
+            if max_rows is not None:
+                span.set_attribute("max_rows", max_rows)
+            if session_id:
+                span.set_attribute("session.id", session_id)
 
-        sid = session_id or str(uuid.uuid4())
-        session = self._get_session(sid)
-        session.push_user(question)
+            if not self._started:
+                await self.start()
+            if not question.strip():
+                span.set_attribute("error", True)
+                raise AgentRuntimeError("Question cannot be empty")
 
-        skills = list(self.skills.values())
-        # Route using LLM (or heuristic fallback if LLM is disabled).
-        selected_skill, route_reason = await self.llm_client.route_skill(
-            question=question,
-            skills=skills,
-            history=session.as_chat_context(self.settings.AGENT_HISTORY_LIMIT),
-        )
-        skill = self.skills[selected_skill]
+            sid = session_id or str(uuid.uuid4())
+            session = self._get_session(sid)
+            session.push_user(question)
 
-        # Dispatch to skill-specific execution branch.
-        if skill.name == "schema-analyzer":
-            response = await self._run_schema_analyzer(
-                question=question,
-                session=session,
-                skill=skill,
-            )
-        elif skill.name == "performance-tuner":
-            response = await self._run_performance_tuner(
-                question=question,
-                max_rows=max_rows,
-                session=session,
-                skill=skill,
-            )
-        else:
-            response = await self._run_query_expert(
-                question=question,
-                max_rows=max_rows,
-                session=session,
-                skill=skill,
-            )
+            skills = list(self.skills.values())
+            with tracer.start_as_current_span("agent.route_skill"):
+                # Route using LLM (or heuristic fallback if LLM is disabled).
+                selected_skill, route_reason = await self.llm_client.route_skill(
+                    question=question,
+                    skills=skills,
+                    history=session.as_chat_context(self.settings.AGENT_HISTORY_LIMIT),
+                )
+            skill = self.skills[selected_skill]
+            span.set_attribute("skill.selected", skill.name)
 
-        response["session_id"] = sid
-        response["selected_skill"] = skill.name
-        response["router_reason"] = route_reason
-        session.push_assistant(response["answer"])
-        session.trim(self.settings.AGENT_HISTORY_LIMIT)
-        return response
+            # Dispatch to skill-specific execution branch.
+            if skill.name == "schema-analyzer":
+                response = await self._run_schema_analyzer(
+                    question=question,
+                    session=session,
+                    skill=skill,
+                )
+            elif skill.name == "performance-tuner":
+                response = await self._run_performance_tuner(
+                    question=question,
+                    max_rows=max_rows,
+                    session=session,
+                    skill=skill,
+                )
+            else:
+                response = await self._run_query_expert(
+                    question=question,
+                    max_rows=max_rows,
+                    session=session,
+                    skill=skill,
+                )
+
+            response["session_id"] = sid
+            response["selected_skill"] = skill.name
+            response["router_reason"] = route_reason
+            session.push_assistant(response["answer"])
+            session.trim(self.settings.AGENT_HISTORY_LIMIT)
+            return response
 
     async def _run_schema_analyzer(
         self,
@@ -126,22 +141,24 @@ class Agent:
         skill: SkillDefinition,
     ) -> dict[str, Any]:
         """Schema skill flow: refresh schema and summarize structural metadata."""
-        schema_data = await self._get_schema(force_refresh=True, session=session)
-        tables = schema_data.get("tables", []) if isinstance(schema_data, dict) else []
-        result = {"tables": tables, "rowCount": len(tables)}
-        answer = await self.llm_client.summarize_answer(
-            question=question,
-            skill_name=skill.name,
-            sql=None,
-            result=result,
-        )
-        return {
-            "question": question,
-            "answer": answer,
-            "sql": None,
-            "params": [],
-            "result": result,
-        }
+        with tracer.start_as_current_span("agent.skill.schema_analyzer") as span:
+            schema_data = await self._get_schema(force_refresh=True, session=session)
+            tables = schema_data.get("tables", []) if isinstance(schema_data, dict) else []
+            result = {"tables": tables, "rowCount": len(tables)}
+            span.set_attribute("tables.count", len(tables))
+            answer = await self.llm_client.summarize_answer(
+                question=question,
+                skill_name=skill.name,
+                sql=None,
+                result=result,
+            )
+            return {
+                "question": question,
+                "answer": answer,
+                "sql": None,
+                "params": [],
+                "result": result,
+            }
 
     async def _run_query_expert(
         self,
@@ -152,44 +169,52 @@ class Agent:
         skill: SkillDefinition,
     ) -> dict[str, Any]:
         """Query skill flow: build SQL, execute query tool, and summarize rows."""
-        schema_data = await self._get_schema(force_refresh=False, session=session)
-        schema_text = self._compact_schema_text(schema_data)
+        with tracer.start_as_current_span("agent.skill.query_expert") as span:
+            schema_data = await self._get_schema(force_refresh=False, session=session)
+            schema_text = self._compact_schema_text(schema_data)
 
-        sql, params, _ = await self.llm_client.generate_sql(
-            question=question,
-            skill=skill,
-            schema_text=schema_text,
-            history=session.as_chat_context(self.settings.AGENT_HISTORY_LIMIT),
-            max_rows=max_rows,
-        )
+            with tracer.start_as_current_span("agent.generate_sql"):
+                sql, params, _ = await self.llm_client.generate_sql(
+                    question=question,
+                    skill=skill,
+                    schema_text=schema_text,
+                    history=session.as_chat_context(self.settings.AGENT_HISTORY_LIMIT),
+                    max_rows=max_rows,
+                )
 
-        query_payload = await self.mcp_client.call_tool(
-            "postgres_query",
-            {
+            with tracer.start_as_current_span("agent.mcp.postgres_query"):
+                query_payload = await self.mcp_client.call_tool(
+                    "postgres_query",
+                    {
+                        "sql": sql,
+                        "params": params,
+                        "max_rows": max_rows,
+                    },
+                )
+            query_data = self.extract_tool_data(query_payload)
+            row_count = query_data.get("rowCount", 0) if isinstance(query_data, dict) else 0
+            if isinstance(row_count, int):
+                span.set_attribute("query.row_count", row_count)
+            session.push_tool(
+                "postgres_query",
+                {"sql": sql, "params": params, "max_rows": max_rows},
+                self._summarize_result(query_data),
+            )
+
+            with tracer.start_as_current_span("agent.summarize_answer"):
+                answer = await self.llm_client.summarize_answer(
+                    question=question,
+                    skill_name=skill.name,
+                    sql=sql,
+                    result=query_data,
+                )
+            return {
+                "question": question,
+                "answer": answer,
                 "sql": sql,
                 "params": params,
-                "max_rows": max_rows,
-            },
-        )
-        query_data = self.extract_tool_data(query_payload)
-        session.push_tool(
-            "postgres_query",
-            {"sql": sql, "params": params, "max_rows": max_rows},
-            self._summarize_result(query_data),
-        )
-        answer = await self.llm_client.summarize_answer(
-            question=question,
-            skill_name=skill.name,
-            sql=sql,
-            result=query_data,
-        )
-        return {
-            "question": question,
-            "answer": answer,
-            "sql": sql,
-            "params": params,
-            "result": query_data,
-        }
+                "result": query_data,
+            }
 
     async def _run_performance_tuner(
         self,
@@ -200,64 +225,70 @@ class Agent:
         skill: SkillDefinition,
     ) -> dict[str, Any]:
         """Performance skill flow: build SQL candidate and inspect its EXPLAIN plan."""
-        schema_data = await self._get_schema(force_refresh=False, session=session)
-        schema_text = self._compact_schema_text(schema_data)
+        with tracer.start_as_current_span("agent.skill.performance_tuner"):
+            schema_data = await self._get_schema(force_refresh=False, session=session)
+            schema_text = self._compact_schema_text(schema_data)
 
-        sql, params, _ = await self.llm_client.generate_sql(
-            question=question,
-            skill=skill,
-            schema_text=schema_text,
-            history=session.as_chat_context(self.settings.AGENT_HISTORY_LIMIT),
-            max_rows=max_rows,
-        )
-        explain_payload = await self.mcp_client.call_tool(
-            "postgres_explain",
-            {"sql": sql, "params": params, "analyze": False},
-        )
-        explain_data = self.extract_tool_data(explain_payload)
-        session.push_tool(
-            "postgres_explain",
-            {"sql": sql, "params": params, "analyze": False},
-            self._summarize_result(explain_data),
-        )
-        answer = await self.llm_client.summarize_answer(
-            question=question,
-            skill_name=skill.name,
-            sql=sql,
-            result=explain_data,
-        )
-        return {
-            "question": question,
-            "answer": answer,
-            "sql": sql,
-            "params": params,
-            "result": explain_data,
-        }
+            with tracer.start_as_current_span("agent.generate_sql"):
+                sql, params, _ = await self.llm_client.generate_sql(
+                    question=question,
+                    skill=skill,
+                    schema_text=schema_text,
+                    history=session.as_chat_context(self.settings.AGENT_HISTORY_LIMIT),
+                    max_rows=max_rows,
+                )
+            with tracer.start_as_current_span("agent.mcp.postgres_explain"):
+                explain_payload = await self.mcp_client.call_tool(
+                    "postgres_explain",
+                    {"sql": sql, "params": params, "analyze": False},
+                )
+            explain_data = self.extract_tool_data(explain_payload)
+            session.push_tool(
+                "postgres_explain",
+                {"sql": sql, "params": params, "analyze": False},
+                self._summarize_result(explain_data),
+            )
+            with tracer.start_as_current_span("agent.summarize_answer"):
+                answer = await self.llm_client.summarize_answer(
+                    question=question,
+                    skill_name=skill.name,
+                    sql=sql,
+                    result=explain_data,
+                )
+            return {
+                "question": question,
+                "answer": answer,
+                "sql": sql,
+                "params": params,
+                "result": explain_data,
+            }
 
     async def _get_schema(self, *, force_refresh: bool, session: AgentSession) -> dict[str, Any]:
         """Fetch schema with TTL cache to avoid repeated metadata calls."""
-        now = time.time()
-        cache_valid = (
-            not force_refresh
-            and self._schema_cache_data is not None
-            and (now - self._schema_cache_at) < self.settings.AGENT_SCHEMA_CACHE_TTL_SEC
-        )
-        if cache_valid:
-            return self._schema_cache_data
+        with tracer.start_as_current_span("agent.schema_context") as span:
+            now = time.time()
+            cache_valid = (
+                not force_refresh
+                and self._schema_cache_data is not None
+                and (now - self._schema_cache_at) < self.settings.AGENT_SCHEMA_CACHE_TTL_SEC
+            )
+            span.set_attribute("schema.cache_hit", bool(cache_valid))
+            if cache_valid:
+                return self._schema_cache_data
 
-        payload = await self.mcp_client.call_tool(
-            "postgres_get_schema",
-            {"tables": None, "include_indexes": False},
-        )
-        schema_data = self.extract_tool_data(payload)
-        session.push_tool(
-            "postgres_get_schema",
-            {"tables": None, "include_indexes": False},
-            self._summarize_result(schema_data),
-        )
-        self._schema_cache_data = schema_data
-        self._schema_cache_at = now
-        return schema_data
+            payload = await self.mcp_client.call_tool(
+                "postgres_get_schema",
+                {"tables": None, "include_indexes": False},
+            )
+            schema_data = self.extract_tool_data(payload)
+            session.push_tool(
+                "postgres_get_schema",
+                {"tables": None, "include_indexes": False},
+                self._summarize_result(schema_data),
+            )
+            self._schema_cache_data = schema_data
+            self._schema_cache_at = now
+            return schema_data
 
     @staticmethod
     def _compact_schema_text(schema_data: dict[str, Any]) -> str:

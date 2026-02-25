@@ -7,6 +7,7 @@ import re
 from typing import Any
 
 from openai import AsyncAzureOpenAI, AsyncOpenAI
+from opentelemetry import trace
 
 from .models import SkillDefinition
 from .settings import AgentCoreSettings
@@ -14,6 +15,9 @@ from .settings import AgentCoreSettings
 
 class LLMClientError(RuntimeError):
     pass
+
+
+tracer = trace.get_tracer(__name__)
 
 
 class LLMClient:
@@ -93,7 +97,8 @@ class LLMClient:
                 ),
             },
         ]
-        parsed = await self._chat_json(messages=messages, max_tokens=220)
+        with tracer.start_as_current_span("agent.llm.route_skill"):
+            parsed = await self._chat_json(messages=messages, max_tokens=220)
         skill = parsed.get("skill")
         reason = parsed.get("reason", "")
         names = {item.name for item in skills}
@@ -135,7 +140,8 @@ class LLMClient:
                 ),
             },
         ]
-        payload = await self._chat_json(messages=messages, max_tokens=600)
+        with tracer.start_as_current_span("agent.llm.generate_sql"):
+            payload = await self._chat_json(messages=messages, max_tokens=600)
         sql = payload.get("sql")
         params = payload.get("params") or []
         reason = payload.get("reason", "")
@@ -187,7 +193,8 @@ class LLMClient:
                 ),
             },
         ]
-        return (await self._chat_text(messages=messages, max_tokens=400)).strip()
+        with tracer.start_as_current_span("agent.llm.summarize_answer"):
+            return (await self._chat_text(messages=messages, max_tokens=400)).strip()
 
     def _heuristic_route(self, question: str, skills: list[SkillDefinition]) -> str:
         """Rule-based routing used when LLM is disabled or router output is invalid."""
@@ -265,20 +272,27 @@ class LLMClient:
         if not self.enabled or self.client is None or self.model is None:
             raise LLMClientError("LLM client is disabled")
 
-        kwargs: dict[str, Any] = {
-            "model": self.model,
-            "messages": messages,
-            "temperature": 0,
-            "max_completion_tokens": max_tokens,
-        }
-        if json_mode:
-            kwargs["response_format"] = {"type": "json_object"}
+        with tracer.start_as_current_span("agent.llm.chat_completion") as span:
+            span.set_attribute("llm.provider", self.provider)
+            span.set_attribute("llm.model", self.model)
+            span.set_attribute("llm.max_completion_tokens", max_tokens)
+            span.set_attribute("llm.response_format_json", json_mode)
 
-        completion = await self.client.chat.completions.create(**kwargs)
-        content = completion.choices[0].message.content
-        if not content:
-            raise LLMClientError("LLM returned empty response")
-        return content
+            kwargs: dict[str, Any] = {
+                "model": self.model,
+                "messages": messages,
+                "temperature": 0,
+                "max_completion_tokens": max_tokens,
+            }
+            if json_mode:
+                kwargs["response_format"] = {"type": "json_object"}
+
+            completion = await self.client.chat.completions.create(**kwargs)
+            content = completion.choices[0].message.content
+            if not content:
+                span.set_attribute("error", True)
+                raise LLMClientError("LLM returned empty response")
+            return content
 
     @staticmethod
     def _compact_rows(rows: list[Any], *, max_rows: int, max_chars: int) -> list[Any]:

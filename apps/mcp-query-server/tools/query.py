@@ -3,6 +3,7 @@ from __future__ import annotations
 from typing import Any
 
 import asyncpg
+from opentelemetry import trace
 
 from config import Settings
 from db.pool import get_pool
@@ -10,6 +11,8 @@ from security.limiter import LimitExceededError, enforce_limit
 from security.validator import SQLValidationError, validate_sql
 from utils.logging import sql_hash
 from utils.timing import timer
+
+tracer = trace.get_tracer(__name__)
 
 
 def register_query_tool(mcp, settings: Settings, logger, log_sql: bool = False) -> None:
@@ -20,60 +23,76 @@ def register_query_tool(mcp, settings: Settings, logger, log_sql: bool = False) 
         max_rows: int | None = None,
     ) -> dict[str, Any]:
         async with timer() as t:
-            try:
-                logger.info("tool_query_request", tool="postgres_query", sql=sql, params=params, max_rows=max_rows)
-                # 1) Validate SQL safety.
-                validate_sql(sql)
-                # 2) Enforce row cap by normalizing/injecting LIMIT.
-                bounded_sql = enforce_limit(
-                    sql=sql,
-                    default_limit=settings.DEFAULT_LIMIT,
-                    max_limit=settings.MAX_LIMIT,
-                    max_rows=max_rows,
-                )
+            with tracer.start_as_current_span("mcp.tool.postgres_query") as span:
+                span.set_attribute("db.system", "postgresql")
+                span.set_attribute("db.operation", "query")
+                if max_rows is not None:
+                    span.set_attribute("db.max_rows", max_rows)
+                try:
+                    logger.info("tool_query_request", tool="postgres_query", sql=sql, params=params, max_rows=max_rows)
+                    # 1) Validate SQL safety.
+                    with tracer.start_as_current_span("mcp.tool.query.validate_sql"):
+                        validate_sql(sql)
+                    # 2) Enforce row cap by normalizing/injecting LIMIT.
+                    with tracer.start_as_current_span("mcp.tool.query.enforce_limit"):
+                        bounded_sql = enforce_limit(
+                            sql=sql,
+                            default_limit=settings.DEFAULT_LIMIT,
+                            max_limit=settings.MAX_LIMIT,
+                            max_rows=max_rows,
+                        )
 
-                # 3) Execute read-only query and normalize asyncpg records to dict.
-                rows = await get_pool().fetch(bounded_sql, *(params or []))
-                dict_rows = [dict(row) for row in rows]
-                columns = list(dict_rows[0].keys()) if dict_rows else []
+                    # 3) Execute read-only query and normalize asyncpg records to dict.
+                    with tracer.start_as_current_span("mcp.tool.query.fetch_rows"):
+                        rows = await get_pool().fetch(bounded_sql, *(params or []))
+                    dict_rows = [dict(row) for row in rows]
+                    columns = list(dict_rows[0].keys()) if dict_rows else []
+                    span.set_attribute("db.row_count", len(dict_rows))
 
-                logger.info(
-                    "tool_query_success",
-                    tool="postgres_query",
-                    sql_hash=sql_hash(sql),
-                    rowCount=len(dict_rows),
-                    durationMs=round(t.ms, 2),
-                    sql=sql if log_sql else None,
-                )
-                return {
-                    "rows": dict_rows,
-                    "rowCount": len(dict_rows),
-                    "columns": columns,
-                    "durationMs": round(t.ms, 2),
-                }
-            except SQLValidationError as exc:
-                return {"error": "validation", "reason": str(exc), "durationMs": round(t.ms, 2)}
-            except LimitExceededError as exc:
-                return {"error": "limit", "reason": str(exc), "durationMs": round(t.ms, 2)}
-            except asyncpg.PostgresError as exc:
-                logger.error(
-                    "tool_query_db_error",
-                    tool="postgres_query",
-                    sql_hash=sql_hash(sql),
-                    durationMs=round(t.ms, 2),
-                    error=str(exc),
-                )
-                return {
-                    "error": "db",
-                    "message": str(exc),
-                    "code": getattr(exc, "sqlstate", None),
-                    "durationMs": round(t.ms, 2),
-                }
-            except Exception:
-                logger.exception(
-                    "tool_query_internal_error",
-                    tool="postgres_query",
-                    sql_hash=sql_hash(sql),
-                    durationMs=round(t.ms, 2),
-                )
-                return {"error": "internal", "durationMs": round(t.ms, 2)}
+                    logger.info(
+                        "tool_query_success",
+                        tool="postgres_query",
+                        sql_hash=sql_hash(sql),
+                        rowCount=len(dict_rows),
+                        durationMs=round(t.ms, 2),
+                        sql=sql if log_sql else None,
+                    )
+                    return {
+                        "rows": dict_rows,
+                        "rowCount": len(dict_rows),
+                        "columns": columns,
+                        "durationMs": round(t.ms, 2),
+                    }
+                except SQLValidationError as exc:
+                    span.set_attribute("error", True)
+                    span.set_attribute("error.type", "SQLValidationError")
+                    return {"error": "validation", "reason": str(exc), "durationMs": round(t.ms, 2)}
+                except LimitExceededError as exc:
+                    span.set_attribute("error", True)
+                    span.set_attribute("error.type", "LimitExceededError")
+                    return {"error": "limit", "reason": str(exc), "durationMs": round(t.ms, 2)}
+                except asyncpg.PostgresError as exc:
+                    span.set_attribute("error", True)
+                    span.set_attribute("error.type", type(exc).__name__)
+                    logger.error(
+                        "tool_query_db_error",
+                        tool="postgres_query",
+                        sql_hash=sql_hash(sql),
+                        durationMs=round(t.ms, 2),
+                        error=str(exc),
+                    )
+                    return {
+                        "error": "db",
+                        "message": str(exc),
+                        "code": getattr(exc, "sqlstate", None),
+                        "durationMs": round(t.ms, 2),
+                    }
+                except Exception:
+                    span.set_attribute("error", True)
+                    logger.exception(
+                        "tool_query_internal_error",
+                        tool="postgres_query",
+                        sql_hash=sql_hash(sql),
+                        durationMs=round(t.ms, 2),
+                    )
+                    return {"error": "internal", "durationMs": round(t.ms, 2)}

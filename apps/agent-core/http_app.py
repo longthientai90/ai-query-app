@@ -11,6 +11,7 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from agent_core import Agent, AgentRuntimeError
 from http_schemas import AgentHandleRequest, AgentHandleResponse, HealthResponse
+from telemetry import get_tracer, setup_telemetry
 
 if sys.platform == "win32":
     asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
@@ -50,6 +51,8 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(title="agent-core-http", lifespan=lifespan)
+setup_telemetry(app=app, service_name="agent-core")
+tracer = get_tracer(__name__)
 
 
 @app.get("/health", response_model=HealthResponse)
@@ -71,17 +74,25 @@ async def list_skills(request: Request) -> list[dict[str, str]]:
 @app.post("/api/chat", response_model=AgentHandleResponse)
 async def handle(payload: AgentHandleRequest, request: Request) -> AgentHandleResponse:
     agent = get_agent(request)
-    try:
-        result = await agent.handle(
-            question=payload.question,
-            max_rows=payload.max_rows,
-            session_id=payload.session_id,
-        )
-    except AgentRuntimeError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
-    except Exception as exc:
-        raise HTTPException(status_code=500, detail=f"Agent processing failed: {exc}") from exc
-    return AgentHandleResponse(**result)
+    with tracer.start_as_current_span("agent.http.handle") as span:
+        span.set_attribute("question.length", len(payload.question))
+        if payload.max_rows is not None:
+            span.set_attribute("max_rows", payload.max_rows)
+        try:
+            result = await agent.handle(
+                question=payload.question,
+                max_rows=payload.max_rows,
+                session_id=payload.session_id,
+            )
+        except AgentRuntimeError as exc:
+            span.set_attribute("error", True)
+            span.set_attribute("error.type", "AgentRuntimeError")
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        except Exception as exc:
+            span.set_attribute("error", True)
+            span.set_attribute("error.type", type(exc).__name__)
+            raise HTTPException(status_code=500, detail=f"Agent processing failed: {exc}") from exc
+        return AgentHandleResponse(**result)
 
 
 def main() -> None:
