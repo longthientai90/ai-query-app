@@ -9,26 +9,23 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+from agent_core_client import AgentCoreClient
+from api_chat import router as chat_router
+
 if sys.platform == "win32":
     asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
-
-# Make apps/agent-core importable as "agent_core".
-REPO_ROOT = Path(__file__).resolve().parents[2]
-AGENT_CORE_DIR = REPO_ROOT / "apps" / "agent-core"
-if str(AGENT_CORE_DIR) not in sys.path:
-    sys.path.insert(0, str(AGENT_CORE_DIR))
-
-from agent_core import Agent  # noqa: E402
-from api_chat import router as chat_router  # noqa: E402
 
 
 class APIGatewaySettings(BaseSettings):
     API_GATEWAY_HOST: str = "0.0.0.0"
     API_GATEWAY_PORT: int = 8000
     API_GATEWAY_CORS_ORIGINS: str = "*"
+    AGENT_CORE_BASE_URL: str = "http://127.0.0.1:8100"
+    AGENT_CORE_HANDLE_PATH: str = "/agent/handle"
+    AGENT_CORE_TIMEOUT_SEC: float = 120.0
 
     model_config = SettingsConfigDict(
-        env_file=".env",
+        env_file=Path(__file__).resolve().with_name(".env"),
         env_file_encoding="utf-8",
         extra="ignore",
     )
@@ -46,13 +43,16 @@ settings = APIGatewaySettings()
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    agent = Agent()
+    client = AgentCoreClient(
+        base_url=settings.AGENT_CORE_BASE_URL,
+        handle_path=settings.AGENT_CORE_HANDLE_PATH,
+        timeout_sec=settings.AGENT_CORE_TIMEOUT_SEC,
+    )
+    app.state.agent_core_client = client
     try:
-        await agent.start()
-        app.state.agent = agent
         yield
     finally:
-        await agent.stop()
+        await client.close()
 
 
 app = FastAPI(title="api-gateway", lifespan=lifespan)
