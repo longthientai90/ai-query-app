@@ -1,0 +1,46 @@
+# Engineering Implementation Plan: Agent Skills (Declarative Knowledge)
+
+## Project Overview
+
+Refactor `packages/agent-skills` to adopt the official **Agent Skills** specification (https://agentskills.io/). 
+
+Previously, skills were hard-coded TypeScript classes. Now, we will convert them into pure **Declarative Text / Markdown** modules with YAML Frontmatter. The idea is to teach the AI what to do using Prompts ("Lớp Tri thức") instead of writing programmatic `if/else` logic. 
+
+## Folder Structure
+
+```text
+packages/agent-skills/
+├── schema-analyzer/
+│   └── SKILL.md
+├── query-expert/
+│   └── SKILL.md
+└── performance-tuner/
+    └── SKILL.md
+```
+
+## Specification Details
+Each `SKILL.md` must follow the Agent Skills standard:
+1. **YAML Frontmatter (Required):** Must contain `name` and `description`. The `description` must clearly explain *when* to activate this skill (Progressive Disclosure strategy).
+2. **Body Content:** The specialized instructions taught to the LLM. It should explain what steps the LLM needs to take, what MCP Tools to call, and what constraints to follow.
+
+## Target Skills to Implement
+
+### 1. `schema-analyzer/SKILL.md`
+- **name:** `schema-analyzer`
+- **description:** "Analyzes whether database schema is needed to answer a user query and fetches the structural DB metadata. Use this when the user asks about available data or whenever you need to understand the database structure before writing SQL."
+- **Body:** Instruct the LLM to call the `postgres_get_schema` tool. Teach it how to interpret the tables, primary keys, and relationships (ERD logic).
+
+### 2. `query-expert/SKILL.md`
+- **name:** `query-expert`
+- **description:** "Generates and executes secure, read-only SQL for PostgreSQL based on the user's question and schema context."
+- **Body:** Teach the LLM to write PostgreSQL queries. Emphasize optimizations, using `LIMIT`, never using `DROP/ALTER`, and how to use the `postgres_query` MCP tool to fetch the actual rows.
+
+### 3. `performance-tuner/SKILL.md`
+- **name:** `performance-tuner`
+- **description:** "Analyzes EXPLAIN plans to detect inefficient SQL access patterns and rewrites SQL for optimal performance."
+- **Body:** Teach the LLM to call `postgres_explain` before running heavy queries. Give it heuristics to detect missing indexes or bad JOINs, and explain how to rewrite the query.
+
+## Deliverables for Codex
+1. Delete the existing `.ts` files inside `packages/agent-skills/` (e.g., `BaseSkill.ts`, `SkillRegistry.ts`, etc., as they are now handled by the Python `agent-core`).
+2. Scaffold the exact folder structures for `schema-analyzer`, `query-expert`, and `performance-tuner`.
+3. Create the `SKILL.md` files for each, populating them with beautifully structured Markdown including the YAML block at the top and step-by-step LLM instructions inside the body.

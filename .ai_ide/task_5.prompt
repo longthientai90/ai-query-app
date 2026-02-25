@@ -1,0 +1,44 @@
+# Engineering Implementation Plan: Agent Core (Runtime + Loader)
+
+## Project Overview
+
+Build (or rewrite) the `agent-core` service in `apps/agent-core` using **Python 3.11+**. 
+This service acts as the orchestration layer (Runtime). It strictly follows the **Inversion of Control** principle: Agent Core only executes, while the intelligent behavior and control logic are defined externally in **Agent Skills** (`packages/agent-skills`).
+
+## Core Technologies
+- **Python 3.11+**
+- **LLM SDK**: Anthropic / OpenAI (for interacting with the LLM).
+- **fastmcp / mcp SDK**: To instantiate the MCP Client that talks to the local `mcp-query-server`.
+- **PyYAML** or similar: To parse Markdown frontmatter.
+
+## Architecture & Responsibilities
+
+1. **Skill Loader**
+   - Scans `../../packages/agent-skills/` recursively.
+   - Reads `SKILL.md` files. Parses the YAML frontmatter to extract `name` and `description` (for Discovery), and the Markdown body (for Instructions).
+   - *Reference Format:* agentskills.io/specification
+
+2. **Router & LLM Connector**
+   - **Discovery Phase:** Core gathers all loaded skill names & descriptions into a prompt block (`<available_skills>`).
+   - **Routing:** When a User message arrives, Core asks the LLM: *"Which skill should we use?"*
+   - **Activation:** Once the LLM chooses (e.g., `query-expert`), Core injects the full body of `query-expert/SKILL.md` into the system prompt.
+   - **Execution:** The LLM proceeds with generating responses or Tool Calls based on the Skill's teaching.
+
+3. **MCP Client SDK Layer**
+   - Initializes a connection to `mcp-query-server` (e.g., connecting to a localhost port or via stdio subprocess).
+   - Plugs the discovered `postgres_query`, `postgres_get_schema` tools into the LLM context.
+   - Triggers the actual Tool calls and returns the Result back to the LLM.
+
+4. **Session Management**
+   - Manages the conversation message history and tracks tool execution states so the Agent "remembers" its thought process.
+
+## Monorepo Integration
+- Optional but recommended: Utilize `packages/shared-types` (or shared schemas) so that the JSON-RPC schema definition is uniform across `agent-core` and `mcp-query-server`.
+- Consider implementing a simple cache interface for database schemas (`db-schema-cache`) so `schema-analyzer` doesn't always have to ping `mcp-query-server`.
+
+## Deliverables for Codex
+1. Re-initialize `apps/agent-core` as a Python application. Add a `requirements.txt`.
+2. Implement the `SkillLoader` class that reads `.md` files equipped with frontmatter.
+3. Implement the MCP Client wrapper using `fastmcp` (or official `mcp` SDK package).
+4. Implement the Agent Workflow loop (Chat loop: User -> LLM Router -> Inject Skill -> LLM Tool Call -> MCP Tool Execution -> Final Response).
+5. Build an entrypoint (e.g., HTTP server via FastAPI or a CLI) that simulates the `api-gateway` sending a REST request to `agent-core`.
