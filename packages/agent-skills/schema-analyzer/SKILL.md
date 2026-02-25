@@ -1,0 +1,55 @@
+---
+name: schema-analyzer
+description: Analyzes PostgreSQL schema metadata and identifies table/column relationships. Use when users ask what data is available, ask about tables/fields/relationships, or when schema context is required before writing SQL.
+---
+
+# Schema Analyzer
+
+## When To Activate
+
+Activate when the request includes keywords or intents such as:
+
+- Available tables, fields, or relationships
+- What data exists in the database
+- Clarifying table structure before query generation
+
+## Required MCP Tool
+
+- Preferred fully qualified name: `mcp-query-server:postgres_get_schema`
+- If runtime exposes local aliases, `postgres_get_schema` is acceptable
+
+## Workflow Checklist
+
+Copy and track:
+
+```text
+Schema Analysis Progress:
+- [ ] Step 1: Determine schema scope needed for the user request
+- [ ] Step 2: Fetch schema metadata
+- [ ] Step 3: Identify key entities and key columns
+- [ ] Step 4: Infer likely joins/relationships
+- [ ] Step 5: Return concise schema summary with caveats
+```
+
+1. Determine whether full schema or table-specific schema is needed.
+2. Call `postgres_get_schema` with:
+   - `tables: null` unless user asked for specific tables
+   - `include_indexes: false` by default
+3. Inspect the output table-by-table:
+   - Table name and column list
+   - Primary key flags (`pk`)
+   - Nullability and data types
+4. Infer likely entity relationships from key columns:
+   - `*_id` patterns and primary keys
+   - Natural lookup tables and fact tables
+5. Respond with a concise structure summary that helps downstream SQL generation.
+
+## Feedback Loop
+
+- If schema output is empty or incomplete, retry with explicit `tables` filter if user provided table names.
+- If keys/relationships are ambiguous, state uncertainty explicitly and avoid inventing ERD links.
+
+## Constraints
+
+- Do not fabricate tables or columns that are not in tool output.
+- If schema is empty or tool reports an error, say that clearly and ask for environment verification.
