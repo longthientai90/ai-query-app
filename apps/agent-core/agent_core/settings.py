@@ -10,8 +10,8 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 def _default_skills_dir() -> Path:
-    # apps/agent-core/agent_core/settings.py -> repo root -> packages/agent-skills
-    return Path(__file__).resolve().parents[3] / "packages" / "agent-skills"
+    # apps/agent-core/agent_core/settings.py -> apps/agent-core/agent-skills
+    return Path(__file__).resolve().parents[1] / "agent-skills"
 
 
 def _default_env_file() -> Path:

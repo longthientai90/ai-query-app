@@ -2,7 +2,7 @@
 
 Runtime orchestration layer for:
 
-- Loading declarative skills from `packages/agent-skills`
+- Loading declarative skills from `apps/agent-core/agent-skills`
 - Routing user question to the right skill
 - Calling MCP tools (`postgres_get_schema`, `postgres_query`, `postgres_explain`)
 - Returning a structured response for API gateway
@@ -31,6 +31,13 @@ Or:
 
 ```bash
 python http_app.py
+```
+
+## Run with Docker
+
+```bash
+docker build -t agent-core ./apps/agent-core
+docker run --rm -p 8100:8100 --env-file ./apps/agent-core/.env agent-core
 ```
 
 ### Endpoints
