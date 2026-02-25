@@ -1,0 +1,144 @@
+You are Antigravity, an expert AI agent systems architect.
+
+Create a detailed engineering implementation plan for:
+
+"Agent Core"
+
+Context
+-------
+We already have:
+
+- API Gateway
+- MCP Query Server (PostgreSQL tools)
+- PostgreSQL
+
+Next step is to implement the Agent Core.
+
+Architecture:
+
+API Gateway
+   ↓
+Agent Core (THIS COMPONENT)
+   ↓
+Agent Skills
+   ↓
+MCP Query Server
+   ↓
+PostgreSQL
+
+Goals
+------
+Agent Core is the runtime engine that:
+
+1. Receives user requests.
+2. Maintains shared context.
+3. Executes skills in sequence.
+4. Calls MCP tools through abstraction.
+5. Produces final agent response.
+
+Agent Core MUST be generic and reusable.
+
+Key design principles
+---------------------
+
+- Skills are plugins.
+- Core controls lifecycle.
+- Skills contain reasoning only.
+- Tools are external via MCP.
+- Core must support skill chaining.
+
+Core responsibilities
+---------------------
+
+1) Context management
+   - maintain AgentContext state
+   - shared between skills
+
+2) Skill orchestration
+   - execute skills in order
+   - allow dynamic routing
+
+3) Skill lifecycle
+   - canHandle()
+   - execute()
+   - update context
+
+4) Tool execution abstraction
+   - call MCP tools safely
+   - no tool logic in skills
+
+5) Error handling and recovery
+   - skill failure handling
+   - graceful fallback
+
+6) Observability
+   - execution logs
+   - skill timing
+   - tool timing
+
+Required features
+-----------------
+
+- Skill Runner
+- Skill Registry integration
+- Skill Router integration
+- Agent Context state machine
+
+Execution flow example:
+
+User Question
+   ↓
+Create AgentContext
+   ↓
+Skill Router selects next skill
+   ↓
+Skill executes
+   ↓
+Context updates
+   ↓
+Next skill
+   ↓
+Final response
+
+Folder structure (propose best practice)
+----------------------------------------
+
+Example idea:
+
+agent-core/
+  core/
+    agent.ts
+    skillRunner.ts
+  context/
+    AgentContext.ts
+  router/
+    skillRouter.ts
+  tools/
+    mcpClient.ts
+  skills/
+    skillRegistry.ts
+
+But you may redesign if better.
+
+Deliverables (PLAN)
+-------------------
+
+1. High-level architecture diagram
+2. Core execution lifecycle
+3. AgentContext design
+4. Skill Runner design
+5. Skill routing strategy
+6. Tool abstraction design
+7. Error handling strategy
+8. Logging / observability
+9. Extensibility strategy
+10. Testing strategy
+11. Example execution walkthrough
+
+Output format
+-------------
+
+Produce a practical engineering plan
+that Codex can implement directly.
+
+Focus on scalability and clean architecture used in modern AI agent systems.

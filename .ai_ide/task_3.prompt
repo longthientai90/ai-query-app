@@ -1,0 +1,218 @@
+# Engineering Implementation Plan: Agent Core
+
+## Project Overview
+
+Build the **Agent Core**, the central runtime engine of our AI Agent Architecture. This component sits between the API Gateway and the Agent Skills, orchestrating the flow of user requests, executing specialized skills, and managing context state.
+
+```
+API Gateway
+   ↓
+Agent Core (THIS COMPONENT)
+   ↓
+Agent Skills
+   ↓
+MCP Query Server
+   ↓
+PostgreSQL
+```
+
+### Key Design Principles
+
+- **Skills are Plugins**: The core should agnostic of specific skill logic. It purely orchestrates.
+- **Controlled Lifecycle**: Agent Core owns the execution pipeline and shared context.
+- **Reasoning Isolation**: Skills contain *only* the LLM reasoning/business logic.
+- **Externalized Tools**: Database/remote data fetching is executed exclusively via MCP Tool Clients.
+- **Skill Chaining**: Support dynamic routing where one skill’s output is passed to the next.
+
+---
+
+## 1. High-Level Architecture Diagram
+
+```text
+┌────────────────────────────────────────────────────────┐
+│                        Agent Core                      │
+│                                                        │
+│  ┌────────────────┐     ┌───────────────────────────┐  │
+│  │                │     │     AgentContext (State)  │  │
+│  │   SkillRunner  │────▶│                           │  │
+│  │   (Pipeline)   │◀────│ - history                 │  │
+│  │                │     │ - metadata                │  │
+│  └────────────────┘     │ - shared data             │  │
+│          │              └───────────────────────────┘  │
+│          ▼                                             │
+│  ┌────────────────┐                                    │
+│  │   SkillRouter  │────▶ (Selects Next Skill)          │
+│  └────────────────┘                                    │
+│          │                                             │
+│          ▼              ┌───────────────────────────┐  │
+│  ┌────────────────┐     │       mcpClient.ts        │  │
+│  │ SkillRegistry  │────▶│ (Tool Abstraction Layer)  │  │
+│  │ (canHandle,    │     └───────────────────────────┘  │
+│  │  execute)      │                                    │
+│  └────────────────┘                                    │
+└──────────┼─────────────────────────────────────────────┘
+           │
+           ▼
+     [External Skills / MCP Server]
+```
+
+---
+
+## 2. Folder Structure
+
+Proposed structure (TypeScript / Node.js):
+
+```text
+agent-core/
+├── core/
+│   ├── index.ts                 # Main export for the library
+│   ├── Agent.ts                 # High-level facade for API Gateway integration
+│   └── SkillRunner.ts           # Orchestrator handling the lifecycle
+├── context/
+│   └── AgentContext.ts          # State machine and shared memory interface
+├── router/
+│   └── SkillRouter.ts           # LLM/Rule-based routing mechanism
+├── skills/
+│   ├── BaseSkill.ts             # Abstract interface (canHandle, execute)
+│   └── SkillRegistry.ts         # Container managing registered skills
+├── tools/
+│   └── McpToolClient.ts         # Secure abstraction wrapper for MCP calls
+├── utils/
+│   ├── logger.ts                # Observability and timing
+│   └── errors.ts                # Standardized Error handling
+└── tests/
+```
+
+---
+
+## 3. Core Execution Lifecycle
+
+The execution loop follows these steps:
+1. **Initialize**: A user request arrives; an `AgentContext` is instantiated or restored from an active session.
+2. **Evaluate**: `SkillRouter` looks at the user input and the current `AgentContext` to determine the next skill.
+3. **Dispatch**: The selected skill is retrieved from the `SkillRegistry`.
+4. **Execute**: The `SkillRunner` calls `.execute(context)` on the skill.
+5. **Tool Calls**: If the skill requires data, it proxies calls through `McpToolClient`.
+6. **Update Context**: The skill finishes, returning an outcome to update `AgentContext`.
+7. **Iterate/Terminate**: If the outcome dictates "done", respond to the user. If "continue", loop back to Step 2.
+
+---
+
+## 4. Component Designs
+
+### A. Context Management (`AgentContext.ts`)
+Must be a strongly typed immutable or carefully mutated class:
+```typescript
+interface Message {
+  role: 'user' | 'agent' | 'system' | 'tool';
+  content: string;
+}
+
+export class AgentContext {
+  public conversationId: string;
+  public history: Message[];
+  public variables: Record<string, any>; // Shared state
+  public turnCount: number;
+  public maxTurns: number = 10;
+  
+  // Methods to append messages and merge variables securely.
+}
+```
+
+### B. Skill Runner (`SkillRunner.ts`)
+Controls the while loop for skill execution, injecting dependencies:
+```typescript
+export class SkillRunner {
+  async run(context: AgentContext): Promise<AgentContext> {
+    while (context.turnCount < context.maxTurns) {
+      const nextSkillId = await this.router.route(context);
+      if (!nextSkillId || nextSkillId === 'TERMINATE') {
+        break; // Return response to user
+      }
+      
+      const skill = this.registry.get(nextSkillId);
+      const startTime = Date.now();
+      
+      try {
+        await skill.execute(context, this.toolClient);
+        // Log timing and success
+      } catch (err) {
+        // Error handling fallback
+      }
+      context.turnCount++;
+    }
+    return context;
+  }
+}
+```
+
+### C. Skill Router (`SkillRouter.ts`)
+Strategy to route requests based on intents:
+- Provide an LLM-based `route(context)`: Asks an LLM to evaluate available skills (from `SkillRegistry` descriptions) and pick the most relevant one, OR
+- Rule-based evaluation using `BaseSkill.canHandle(context)`.
+
+### D. Tool Abstraction (`McpToolClient.ts`)
+Skills should not contain raw database configurations or HTTP endpoints.
+The `McpToolClient` exposes an agnostic interface:
+```typescript
+export interface ToolClient {
+  callTool(toolName: string, params: Record<string, any>): Promise<any>;
+}
+```
+This isolates the agent from MCP implementation details and adds a perfect boundary for timing, logging, and retry logic.
+
+---
+
+## 5. Extensibility & Extensibility Strategy
+
+- **Plugin Architecture**: Creating a new skill involves extending `BaseSkill` and registering it during startup `registry.register(new AccountingSkill())`.
+- **Interchangeable Router**: `SkillRouter` is an interface. We can swap a simple rule-based router for an LLM-powered Semantic Router without modifying the Runner.
+
+---
+
+## 6. Error Handling Strategy
+
+- **Skill Execution Errors**: If a skill crashes, `SkillRunner` catches the exception, halts chaining, and emits an `AgentInternalError` to the context (which allows a Fallback Skill to apologize to the user without crashing the whole application process).
+- **Tool Errors**: If `McpToolClient` fails to connect to PostgreSQL, it throws a typed `ToolExecutionError`. The skill decides if it should output an error string or retry.
+
+---
+
+## 7. Logging & Observability
+
+Standardize structured logging (`logger.ts`) per turn:
+- **Trace IDs**: Attach a `conversationId` to every log.
+- **Skill Timing**: Log `{ event: "skill_execute", skill: "sql_gen", durationMs: 405 }`.
+- **Tool Timing**: Log `{ event: "tool_call", tool: "postgres_query", durationMs: 20 }`.
+
+---
+
+## 8. Testing Strategy
+
+1. **Unit Tests**:
+   - `SkillRunner`: Mock the router and registry; assert that it runs the max loop correctly.
+   - `AgentContext`: Ensure variables cannot be overwritten incorrectly.
+2. **Integration Tests**:
+   - Create Dummy Skills inside test suites and assert the overall lifecycle passes shared variables from Skill A to Skill B.
+3. **Mocks**:
+   - Provide `MockToolClient` to ensure testing requires no external database.
+
+---
+
+## 9. Example Execution Walkthrough
+
+1. **User Input:** "Show me the top 5 largest transactions."
+2. **Init:** `AgentContext` is created with the user message.
+3. **Router:** `SkillRouter` analyzes the input. It sees the `SQLGenerationSkill` and sets it as next context.
+4. **SkillRunner:** Invokes `SQLGenerationSkill.execute()`.
+5. **Skill execution:** The skill uses LLM to generate `SELECT * FROM tx LIMIT 5`. It uses `McpToolClient.callTool('postgres_query', { sql: "..." })`.
+6. **Tool execution:** MCP returns 5 rows.
+7. **Context update:** The skill appends the tool result to `AgentContext.variables.lastQueryResult` and returns.
+8. **Router (Loop 2):** `SkillRouter` sees we have data but no natural language response yet. It routes to `SynthesisSkill`.
+9. **Final Output:** `SynthesisSkill` reads `variables.lastQueryResult`, composes a nice markdown table, sets `TERMINATE`, and the Agent returns the markdown to the User.
+
+---
+
+## Sub-Task for Codex
+1. Scaffold the folder structure as defined.
+2. Implement TypeScript interfaces and base classes (`AgentContext`, `BaseSkill`, `SkillRunner`, `SkillRouter`, `McpToolClient`).
+3. Add a placeholder or mocked dummy skill to demonstrate the pipeline working in a small local runner script (`index.ts`).

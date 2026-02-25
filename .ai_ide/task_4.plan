@@ -1,0 +1,136 @@
+You are Antigravity, an expert AI agent architect.
+
+Create a detailed engineering implementation plan for:
+
+"Agent Skill System"
+
+Context
+-------
+We already have:
+
+- API Gateway
+- Agent Core
+- MCP Query Server (PostgreSQL tools)
+- PostgreSQL database
+
+Now we want to design and implement the Agent Skill layer.
+
+Architecture:
+
+API Gateway
+   ↓
+Agent Core
+   ↓
+Agent Skills (THIS PART)
+   ├─ schema-analyzer
+   ├─ query-expert
+   └─ performance-tuner
+   ↓
+MCP Query Server
+   ↓
+PostgreSQL
+
+Goals
+------
+Design a skill system that:
+
+1. Allows the agent to dynamically choose skills.
+2. Keeps skills modular and extensible.
+3. Separates reasoning logic from tool execution.
+4. Supports skill chaining.
+
+The skill system must be generic, not hardcoded for PostgreSQL only.
+
+Skills to support initially
+---------------------------
+
+1) schema-analyzer
+   - determines when schema info is needed
+   - calls MCP schema tool
+   - summarizes DB structure for later steps
+
+2) query-expert
+   - generates safe SQL using schema context
+   - ensures best practices:
+     - explicit columns
+     - joins with conditions
+     - default limits
+   - calls postgres_query tool
+
+3) performance-tuner
+   - detects inefficient SQL patterns
+   - optionally calls EXPLAIN tool
+   - suggests or rewrites optimized query
+
+Requirements
+------------
+
+Design:
+
+- Skill interface definition
+- Skill registry
+- Skill router (how agent selects skill)
+- Skill execution lifecycle
+- Shared context object between skills
+- Tool invocation abstraction
+
+Important design constraints
+----------------------------
+
+- Skills contain reasoning logic only.
+- Tools are external (MCP).
+- Skills must not directly connect to DB.
+- Skills communicate via context state.
+
+Skill lifecycle example:
+
+User question
+   ↓
+skill router
+   ↓
+schema-analyzer
+   ↓
+query-expert
+   ↓
+performance-tuner
+   ↓
+tool execution
+   ↓
+final response
+
+Folder structure requirement
+----------------------------
+
+Design a clean modular structure, for example:
+
+agent-core/
+  skills/
+  core/
+  router/
+  context/
+  tools/
+  prompts/
+
+But you are free to propose better structure.
+
+Deliverables (PLAN)
+-------------------
+
+1. High-level architecture
+2. Skill execution flow
+3. Skill interface design
+4. Skill registry design
+5. Skill router strategy
+6. Context state design
+7. Error handling strategy
+8. Extending system with new skills
+9. Testing strategy
+10. Example lifecycle walkthrough
+
+Output format
+-------------
+
+Produce a practical engineering implementation plan
+that Codex can directly implement.
+
+Focus on clean scalable design suitable for enterprise AI agents.

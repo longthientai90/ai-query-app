@@ -1,0 +1,254 @@
+# Engineering Implementation Plan: Agent Skill System
+
+## Project Overview
+
+Build the **Agent Skill System** for our AI Agent Architecture. This layer sits below the Agent Core and contains the specialized reasoning modules (Skills). Skills are dynamically selected and executed to fulfill a user's request.
+
+```text
+API Gateway
+   ↓
+Agent Core
+   ↓
+Agent Skills (THIS PART)
+   ├─ schema-analyzer
+   ├─ query-expert
+   └─ performance-tuner
+   ↓
+MCP Query Server
+   ↓
+PostgreSQL
+```
+
+### Key Design Principles
+1. **Dynamic Selection**: The agent router decides which skill runs next.
+2. **Modularity & Extensibility**: New skills can be dropped into the system seamlessly.
+3. **Reasoning Isolation**: Skills contain *only* reasoning logic. All external physical interactions happen via MCP Tools.
+4. **Skill Chaining**: Skills communicate and pass data sequentially via a shared Context.
+5. **Generality**: The skill framework itself is agnostic to PostgreSQL. Only specific skill implementations care about it.
+
+---
+
+## 1. High-Level Architecture Diagram
+
+```text
+┌────────────────────────────────────────────────────────┐
+│                      Agent Core                        │
+│                                                        │
+│ ┌──────────────┐     ┌──────────────────────────────┐  │
+│ │ SkillRouter  │────▶│         SkillRegistry        │  │
+│ └──────────────┘     └──────────────────────────────┘  │
+│        │                             │                 │
+│        ▼                             ▼                 │
+│ ┌──────────────┐             ┌────────────────┐        │
+│ │              │────[State]─▶│  BaseSkill     │        │
+│ │  SkillRunner │             │  (Interface)   │        │
+│ │              │   ┌─────────┼────────────────┼─────┐  │
+│ └──────────────┘   │Schema   │Query           │Perf │  │
+│                    │Analyzer │Expert          │Tuner│  │
+│                    └─────────┴────────────────┴─────┘  │
+│                                      │                 │
+└──────────────────────────────────────┼─────────────────┘
+                                       ▼
+                         ┌─────────────────────────┐
+                         │      McpToolClient      │
+                         └─────────────────────────┘
+```
+
+---
+
+## 2. Folder Structure
+
+We will embed the skills neatly within or adjacent to the `agent-core` project. Here is the recommended directory map:
+
+```text
+agent-core/
+├── core/
+│   └── SkillRunner.ts        # Executes skills safely
+├── context/
+│   └── AgentContext.ts       # Shared state object
+├── router/
+│   └── SkillRouter.ts        # Selection mechanism
+├── tools/
+│   └── McpToolClient.ts      # The external MCP interface
+├── prompts/                  # LLM Prompt templates for reasoning
+│   ├── schemaAnalyzerPrompt.ts
+│   ├── queryExpertPrompt.ts
+│   └── performanceTunerPrompt.ts
+└── skills/
+    ├── BaseSkill.ts          # Base interface
+    ├── SkillRegistry.ts      # Dictionary/Loader
+    ├── schemaAnalyzer/
+    │   └── SchemaAnalyzerSkill.ts
+    ├── queryExpert/
+    │   └── QueryExpertSkill.ts
+    └── performanceTuner/
+        └── PerformanceTunerSkill.ts
+```
+
+---
+
+## 3. Context State Design (`AgentContext.ts`)
+
+Skills communicate by mutating (or producing new versions of) the `AgentContext`.
+
+```typescript
+export interface Message {
+  role: 'user' | 'assistant' | 'system';
+  content: string;
+}
+
+export class AgentContext {
+  // Chat history and raw user request
+  public history: Message[] = [];
+  
+  // Shared whiteboard for skills
+  public variables: {
+    dbSchemaInfo?: string;
+    targetQuery?: string;
+    queryExplainPlan?: string;
+    queryResults?: any;
+    [key: string]: any;
+  } = {};
+
+  // For chaining: a skill can hint what should run next
+  public nextSkillHint?: string;
+
+  public setVariable(key: string, value: any): void {
+    this.variables[key] = value;
+  }
+}
+```
+
+---
+
+## 4. Skill Interface Design (`BaseSkill.ts`)
+
+Every skill must conform to an expected interface.
+
+```typescript
+export interface SkillOutput {
+  status: 'CONTINUE' | 'TERMINATE' | 'ERROR';
+  message: string;              // For debugging or direct user output
+  suggestedNextSkill?: string;  // E.g., "performance_tuner"
+}
+
+export abstract class BaseSkill {
+  public abstract readonly name: string;
+  public abstract readonly description: string; // Used by LLM Router to select
+
+  /**
+   * Evaluate if this skill should handle the current context
+   */
+  public abstract canHandle(context: AgentContext): Promise<boolean>;
+
+  /**
+   * Core logic execution
+   */
+  public abstract execute(
+    context: AgentContext, 
+    toolClient: McpToolClient
+  ): Promise<SkillOutput>;
+}
+```
+
+---
+
+## 5. Skill Registry Design (`SkillRegistry.ts`)
+
+A simple container that auto-loads or explicitly registers skills upon initialization.
+
+```typescript
+export class SkillRegistry {
+  private skills: Map<string, BaseSkill> = new Map();
+
+  public register(skill: BaseSkill) {
+    this.skills.set(skill.name, skill);
+  }
+
+  public get(name: string): BaseSkill | undefined {
+    return this.skills.get(name);
+  }
+
+  public getAllDescriptions(): { name: string, description: string }[] {
+    return Array.from(this.skills.values()).map(s => ({
+      name: s.name,
+      description: s.description
+    }));
+  }
+}
+```
+
+---
+
+## 6. Skill Router Strategy (`SkillRouter.ts`)
+
+1. **Rule-Based Routing**: If `AgentContext.nextSkillHint` is set, route directly to it.
+2. **LLM Semantic Routing**: If no specific hint, gather `registry.getAllDescriptions()` and prompt an LLM: 
+   *"Given the user request X and the current Context Y, which of the following skills should run next?"*
+
+---
+
+## 7. Skill Implementations
+
+### A. Schema Analyzer (`SchemaAnalyzerSkill.ts`)
+- **Reasoning**: Determines if it needs database structure to answer the query.
+- **Action**: Calls `McpToolClient.callTool('postgres_get_schema')`.
+- **Output**: Formats schema response, saves to `context.variables.dbSchemaInfo`, and sets `suggestedNextSkill = 'query_expert'`.
+
+### B. Query Expert (`QueryExpertSkill.ts`)
+- **Reasoning**: Reads `variables.dbSchemaInfo` and the user query to build highly optimized, secure SQL. Ensures column names are exact. Ensures default LIMIT limits are safely added conceptually.
+- **Action**: Potentially calls `McpToolClient.callTool('postgres_query', { sql... })`.
+- **Output**: Saves rows to `context.variables.queryResults` or sets `suggestedNextSkill = 'performance_tuner'` if the query is very complex.
+
+### C. Performance Tuner (`PerformanceTunerSkill.ts`)
+- **Reasoning**: Looks at `variables.targetQuery`. If missing indices or doing huge table scans, optimizes the SQL text.
+- **Action**: Uses `postgres_explain` to analyze the query.
+- **Output**: Replaces `variables.targetQuery` with optimized syntax and proceeds.
+
+---
+
+## 8. Error Handling Strategy
+
+- **Graceful Fallback**: If a skill throws an exception, `SkillRunner` intercepts it, logs the error, and updates context: `context.variables.lastError = err.message`.
+- **Self-Correction Strategy**: The Router can redirect to an `ErrorRecoverySkill` or return a graceful failure message back to the user without crashing the server.
+- **Tool Failures**: If the MCP Tool call fails (e.g., PostgreSQL is unreachable or gives syntax error), the Skill interprets the error, logs it, and can choose to rewrite the SQL (in `QueryExpert`) and try again.
+
+---
+
+## 9. Extending System With New Skills
+
+To add a new skill (e.g., `DataVisualizationSkill`):
+1. Create `skills/dataVisualization/DataVisualizationSkill.ts` implementing `BaseSkill`.
+2. Define `name = "data_visualizer"` and a clear `description`.
+3. In `index.ts` or initialization script: `registry.register(new DataVisualizationSkill())`.
+4. The semantic router dynamically incorporates it immediately.
+
+---
+
+## 10. Testing Strategy
+
+- **Mock Tool Client**: Supply a purely mocked `McpToolClient` that returns fake database schemas and fake rows.
+- **Unit Testing Validation**:
+  - Test `SchemaAnalyzer` given a mock context; assert it outputs `CONTINUE` and sets the schema string.
+  - Test `QueryExpert` given mock schema info; assert it builds the correct select string.
+- **Router Testing**: Mock LLM responses to ensure the router transitions properly.
+
+---
+
+## 11. Example Lifecycle Walkthrough
+
+1. **User Request**: "How much revenue did we make in Q2?"
+2. **Router**: LLM sees the prompt requires exact DB columns. Returns `schema_analyzer`.
+3. **Schema Analyzer**: 
+   - Checks context (schema is empty). 
+   - Calls MCP Tool `postgres_get_schema`.
+   - Populates `context.variables.dbSchemaInfo`.
+   - Returns `suggestedNextSkill = 'query_expert'`.
+4. **Router**: Sees hint for `query_expert`. Routes.
+5. **Query Expert**:
+   - Asks LLM using `queryExpertPrompt` with `history` + `dbSchemaInfo`. 
+   - LLM produces `SELECT SUM(amount) FROM payments...LIMIT 100`.
+   - Calls MCP Tool `postgres_query`.
+   - Places results in `context.variables.queryResults`.
+   - Returns `TERMINATE` with formatted text.
+6. **Agent Core**: Takes the final result and sends it out the API Gateway to User.
