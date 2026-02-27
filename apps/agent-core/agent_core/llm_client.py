@@ -222,7 +222,8 @@ class LLMClient:
                 "SELECT date_trunc('month', created_at) AS month, "
                 "SUM(total_amount) AS revenue "
                 "FROM orders "
-                "WHERE date_trunc('month', created_at) = date_trunc('month', CURRENT_DATE) "
+                "WHERE created_at >= date_trunc('month', CURRENT_DATE) "
+                "AND created_at < (date_trunc('month', CURRENT_DATE) + interval '1 month') "
                 "GROUP BY 1 "
                 "ORDER BY 1 DESC "
                 f"LIMIT {safe_limit}",
@@ -230,15 +231,28 @@ class LLMClient:
                 "heuristic-revenue-sql",
             )
 
-        table_name = self._first_table_from_schema(schema_text) or "orders"
-        return (f"SELECT * FROM {table_name} LIMIT {safe_limit}", [], "heuristic-generic-sql")
+        table_name, columns = self._first_table_with_columns_from_schema(schema_text)
+        chosen_table = table_name or "orders"
+        selected_columns = columns[:3] if columns else ["id"]
+        projection = ", ".join(selected_columns)
+        return (f"SELECT {projection} FROM {chosen_table} LIMIT {safe_limit}", [], "heuristic-generic-sql")
 
     @staticmethod
-    def _first_table_from_schema(schema_text: str) -> str | None:
-        match = re.search(r"^([a-zA-Z_][\w]*)\s*\(", schema_text, flags=re.MULTILINE)
-        if match:
-            return match.group(1)
-        return None
+    def _first_table_with_columns_from_schema(schema_text: str) -> tuple[str | None, list[str]]:
+        match = re.search(r"^([a-zA-Z_][\w]*)\s*\(([^)]*)\)", schema_text, flags=re.MULTILINE)
+        if not match:
+            return None, []
+
+        table_name = match.group(1)
+        raw_columns = [part.strip() for part in match.group(2).split(",") if part.strip()]
+        columns: list[str] = []
+        for item in raw_columns:
+            if ":" not in item:
+                continue
+            col_name = item.split(":", 1)[0].strip()
+            if re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", col_name):
+                columns.append(col_name)
+        return table_name, columns
 
     @staticmethod
     def _heuristic_summary(*, question: str, skill_name: str, rows: list[Any], row_count: int) -> str:

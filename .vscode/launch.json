@@ -1,0 +1,55 @@
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "name": "MCP Query Server (no reload)",
+      "type": "debugpy",
+      "request": "launch",
+      "python": "${workspaceFolder}/apps/mcp-query-server/.venv/Scripts/python.exe",
+      "program": "${workspaceFolder}/apps/mcp-query-server/main.py",
+      "cwd": "${workspaceFolder}/apps/mcp-query-server",
+      "envFile": "${workspaceFolder}/apps/mcp-query-server/.env",
+      "console": "integratedTerminal",
+      "justMyCode": true
+    },
+    {
+      "name": "Agent Core HTTP (no reload)",
+      "type": "debugpy",
+      "request": "launch",
+      "python": "${workspaceFolder}/apps/agent-core/.venv/Scripts/python.exe",
+      "module": "uvicorn",
+      "cwd": "${workspaceFolder}/apps/agent-core",
+      "args": [
+        "http_app:app",
+        "--host",
+        "0.0.0.0",
+        "--port",
+        "8100"
+      ],
+      "envFile": "${workspaceFolder}/apps/agent-core/.env",
+      "console": "integratedTerminal",
+      "justMyCode": true
+    },
+    {
+      "name": "API Gateway (no reload)",
+      "type": "debugpy",
+      "request": "launch",
+      "python": "${workspaceFolder}/apps/api-gateway/.venv/Scripts/python.exe",
+      "program": "${workspaceFolder}/apps/api-gateway/main.py",
+      "cwd": "${workspaceFolder}/apps/api-gateway",
+      "envFile": "${workspaceFolder}/apps/api-gateway/.env",
+      "console": "integratedTerminal",
+      "justMyCode": true
+    }
+  ],
+  "compounds": [
+    {
+      "name": "Run All Backends (no reload)",
+      "configurations": [
+        "MCP Query Server (no reload)",
+        "Agent Core HTTP (no reload)",
+        "API Gateway (no reload)"
+      ]
+    }
+  ]
+}

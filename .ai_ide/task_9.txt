@@ -1,0 +1,110 @@
+thôi tôi biết thì để câu query tốt thì cơ bản nên hit vào index, bạn review agent-skill cho query xem có cải tiển gì không
+
+Bây giờ hãy xem thêm 
+
+_compact_schema_text
+ trong 
+
+agent.py
+ và 
+
+_get_schema
+ trả dữ liệu gì, kết hợp file 
+
+db_ec.sql
+ vừa tạo để hiểu rõ thông tin index:
+
+Analyzed
+Analyzed
+Tuyệt, tôi đã review toàn bộ chain từ 
+
+SKILL.md
+ → 
+
+llm_client.py
+ (prompt gửi đi) → 
+
+agent.py
+ (cách schema được thu thập và truyền vào) → 
+
+schema.py
+ (dữ liệu schema trả về). Dưới đây là phân tích chi tiết:
+
+Review: Điểm mạnh hiện tại
+File 
+
+SKILL.md
+ của query-expert đã có phần Performance Guidelines (dòng 59-64) nhắc LLM:
+
+Select only needed columns.
+Filter as early as possible.
+Avoid cartesian joins.
+Use indexed columns in WHERE and join predicates when possible.
+Tuy nhiên, dòng cuối cùng "Use indexed columns ... when possible" gần như vô tác dụng vì LLM không hề biết database có những index nào!
+
+Vấn đề cốt lõi: LLM không nhìn thấy thông tin Index
+Hãy nhìn vào luồng hiện tại:
+
+
+agent.py
+ dòng 173: Gọi 
+
+_get_schema(force_refresh=False)
+ → bên trong gọi MCP tool 
+
+postgres_get_schema
+ với tham số include_indexes=False.
+
+schema.py
+ dòng 88: Vì include_indexes=False, nên toàn bộ khối query INDEX_SQL (pg_indexes) bị bỏ qua. Kết quả trả về chỉ có tên cột và kiểu dữ liệu, không có index.
+
+agent.py
+ dòng 174: 
+
+_compact_schema_text()
+ chỉ lấy name:type cho mỗi cột, bỏ mất hoàn toàn cả thông tin Primary Key lẫn Index.
+
+llm_client.py
+ dòng 136: Schema text được đưa vào prompt cho LLM, nhưng nội dung chỉ dạng:
+orders(id:bigint, user_id:bigint, status:character varying, total_amount:numeric, created_at:timestamp)
+→ LLM không biết user_id có index, 
+
+id
+ là PK, hay created_at nên sort theo hướng nào.
+Đề xuất cải tiến (2 điểm chính)
+1. Truyền thêm thông tin PK và Index vào schema text cho LLM
+Hiện tại hàm 
+
+_compact_schema_text
+ chỉ in col_name:col_type. Bạn nên bổ sung thêm đánh dấu PK và Index để LLM biết nên WHERE / JOIN / ORDER BY trên cột nào. Ví dụ output mong muốn:
+
+orders(id:bigint[PK], user_id:bigint[IDX], status:character varying, total_amount:numeric, created_at:timestamp)
+  indexes: idx_orders_user_id(user_id)
+Việc này cần sửa 2 chỗ:
+
+
+agent.py
+: Đổi 
+
+_get_schema(force_refresh=False)
+ → truyền include_indexes=True (hoặc tạo flag riêng).
+
+agent.py
+ → 
+
+_compact_schema_text
+: Cập nhật logic để thêm marker [PK], [IDX] và dòng indexes:.
+2. Bổ sung hướng dẫn cụ thể hơn trong 
+
+SKILL.md
+Phần Performance Guidelines hiện tại quá chung chung. Nên thêm chi tiết hơn để LLM "ép" phải tư duy đúng:
+
+markdown
+## Performance Guidelines
+- Select only needed columns, never use `SELECT *`.
+- Filter as early as possible in WHERE clause.
+- Avoid cartesian joins (always include ON condition).
+- **Always prefer columns marked [PK] or [IDX] in WHERE, JOIN ON, and ORDER BY clauses.**
+- **When filtering by foreign key (e.g. category_id, user_id), use the indexed column directly instead of joining then filtering by name.**
+- When sorting large result sets, prefer ORDER BY on indexed columns.
+- For time-range queries, use indexed timestamp columns with sargable expressions (avoid wrapping indexed columns in functions like date_trunc()).

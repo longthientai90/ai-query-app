@@ -3,6 +3,7 @@ from __future__ import annotations
 """Main runtime orchestration for skill routing and tool execution."""
 
 import json
+import re
 import time
 import uuid
 from typing import Any
@@ -44,8 +45,8 @@ class Agent:
         self.sessions: dict[str, AgentSession] = {}
 
         self._started = False
-        self._schema_cache_data: dict[str, Any] | None = None
-        self._schema_cache_at = 0.0
+        self._schema_cache_data: dict[bool, dict[str, Any]] = {}
+        self._schema_cache_at: dict[bool, float] = {}
 
     async def start(self) -> None:
         """Load skills once and establish MCP connection."""
@@ -142,7 +143,11 @@ class Agent:
     ) -> dict[str, Any]:
         """Schema skill flow: refresh schema and summarize structural metadata."""
         with tracer.start_as_current_span("agent.skill.schema_analyzer") as span:
-            schema_data = await self._get_schema(force_refresh=True, session=session)
+            schema_data = await self._get_schema(
+                force_refresh=True,
+                include_indexes=False,
+                session=session,
+            )
             tables = schema_data.get("tables", []) if isinstance(schema_data, dict) else []
             result = {"tables": tables, "rowCount": len(tables)}
             span.set_attribute("tables.count", len(tables))
@@ -170,7 +175,11 @@ class Agent:
     ) -> dict[str, Any]:
         """Query skill flow: build SQL, execute query tool, and summarize rows."""
         with tracer.start_as_current_span("agent.skill.query_expert") as span:
-            schema_data = await self._get_schema(force_refresh=False, session=session)
+            schema_data = await self._get_schema(
+                force_refresh=False,
+                include_indexes=True,
+                session=session,
+            )
             schema_text = self._compact_schema_text(schema_data)
 
             with tracer.start_as_current_span("agent.generate_sql"):
@@ -182,24 +191,55 @@ class Agent:
                     max_rows=max_rows,
                 )
 
-            with tracer.start_as_current_span("agent.mcp.postgres_query"):
-                query_payload = await self.mcp_client.call_tool(
+            query_data: dict[str, Any]
+            retry_count = 0
+            while True:
+                with tracer.start_as_current_span("agent.mcp.postgres_query"):
+                    query_payload = await self.mcp_client.call_tool(
+                        "postgres_query",
+                        {
+                            "sql": sql,
+                            "params": params,
+                            "max_rows": max_rows,
+                        },
+                    )
+                query_data = self.extract_tool_data(query_payload)
+                session.push_tool(
                     "postgres_query",
-                    {
-                        "sql": sql,
-                        "params": params,
-                        "max_rows": max_rows,
-                    },
+                    {"sql": sql, "params": params, "max_rows": max_rows},
+                    self._summarize_result(query_data),
                 )
-            query_data = self.extract_tool_data(query_payload)
+
+                query_error = query_data.get("error") if isinstance(query_data, dict) else None
+                if retry_count >= 1 or query_error not in {"db", "timeout"}:
+                    break
+
+                retry_count += 1
+                retry_message = query_data.get("message") if isinstance(query_data, dict) else None
+                retry_reason = query_data.get("reason") if isinstance(query_data, dict) else None
+                retry_code = query_data.get("code") if isinstance(query_data, dict) else None
+                retry_context = (
+                    f"{question}\n\n"
+                    f"Previous SQL failed.\n"
+                    f"previous_sql: {sql}\n"
+                    f"error_type: {query_error}\n"
+                    f"error_code: {retry_code}\n"
+                    f"error_message: {retry_message or retry_reason or 'unknown'}\n"
+                    "Rewrite SQL to preserve intent and avoid the same failure."
+                )
+                with tracer.start_as_current_span("agent.generate_sql_retry"):
+                    sql, params, _ = await self.llm_client.generate_sql(
+                        question=retry_context,
+                        skill=skill,
+                        schema_text=schema_text,
+                        history=session.as_chat_context(self.settings.AGENT_HISTORY_LIMIT),
+                        max_rows=max_rows,
+                    )
+
+            span.set_attribute("query.retry_count", retry_count)
             row_count = query_data.get("rowCount", 0) if isinstance(query_data, dict) else 0
             if isinstance(row_count, int):
                 span.set_attribute("query.row_count", row_count)
-            session.push_tool(
-                "postgres_query",
-                {"sql": sql, "params": params, "max_rows": max_rows},
-                self._summarize_result(query_data),
-            )
 
             with tracer.start_as_current_span("agent.summarize_answer"):
                 answer = await self.llm_client.summarize_answer(
@@ -226,7 +266,11 @@ class Agent:
     ) -> dict[str, Any]:
         """Performance skill flow: build SQL candidate and inspect its EXPLAIN plan."""
         with tracer.start_as_current_span("agent.skill.performance_tuner"):
-            schema_data = await self._get_schema(force_refresh=False, session=session)
+            schema_data = await self._get_schema(
+                force_refresh=False,
+                include_indexes=True,
+                session=session,
+            )
             schema_text = self._compact_schema_text(schema_data)
 
             with tracer.start_as_current_span("agent.generate_sql"):
@@ -263,31 +307,40 @@ class Agent:
                 "result": explain_data,
             }
 
-    async def _get_schema(self, *, force_refresh: bool, session: AgentSession) -> dict[str, Any]:
+    async def _get_schema(
+        self,
+        *,
+        force_refresh: bool,
+        include_indexes: bool,
+        session: AgentSession,
+    ) -> dict[str, Any]:
         """Fetch schema with TTL cache to avoid repeated metadata calls."""
         with tracer.start_as_current_span("agent.schema_context") as span:
             now = time.time()
+            cached_data = self._schema_cache_data.get(include_indexes)
+            cached_at = self._schema_cache_at.get(include_indexes, 0.0)
             cache_valid = (
                 not force_refresh
-                and self._schema_cache_data is not None
-                and (now - self._schema_cache_at) < self.settings.AGENT_SCHEMA_CACHE_TTL_SEC
+                and cached_data is not None
+                and (now - cached_at) < self.settings.AGENT_SCHEMA_CACHE_TTL_SEC
             )
             span.set_attribute("schema.cache_hit", bool(cache_valid))
+            span.set_attribute("schema.include_indexes", include_indexes)
             if cache_valid:
-                return self._schema_cache_data
+                return cached_data
 
             payload = await self.mcp_client.call_tool(
                 "postgres_get_schema",
-                {"tables": None, "include_indexes": False},
+                {"tables": None, "include_indexes": include_indexes},
             )
             schema_data = self.extract_tool_data(payload)
             session.push_tool(
                 "postgres_get_schema",
-                {"tables": None, "include_indexes": False},
+                {"tables": None, "include_indexes": include_indexes},
                 self._summarize_result(schema_data),
             )
-            self._schema_cache_data = schema_data
-            self._schema_cache_at = now
+            self._schema_cache_data[include_indexes] = schema_data
+            self._schema_cache_at[include_indexes] = now
             return schema_data
 
     @staticmethod
@@ -297,16 +350,67 @@ class Agent:
         for table in tables:
             table_name = table.get("name")
             columns = table.get("columns", [])
+            indexes = table.get("indexes", [])
             if not isinstance(table_name, str) or not isinstance(columns, list):
                 continue
+
+            indexed_columns: set[str] = set()
+            index_summaries: list[str] = []
+            if isinstance(indexes, list):
+                for index in indexes:
+                    if not isinstance(index, dict):
+                        continue
+                    index_name = index.get("name")
+                    index_definition = index.get("definition")
+                    parsed_columns = (
+                        Agent._extract_index_columns(index_definition)
+                        if isinstance(index_definition, str)
+                        else []
+                    )
+                    indexed_columns.update(parsed_columns)
+                    if isinstance(index_name, str):
+                        if parsed_columns:
+                            index_summaries.append(f"{index_name}({', '.join(parsed_columns)})")
+                        elif isinstance(index_definition, str):
+                            index_summaries.append(f"{index_name}: {index_definition}")
+
             col_parts: list[str] = []
             for col in columns:
                 col_name = col.get("name")
                 col_type = col.get("type")
                 if isinstance(col_name, str) and isinstance(col_type, str):
-                    col_parts.append(f"{col_name}:{col_type}")
+                    markers: list[str] = []
+                    if bool(col.get("pk")):
+                        markers.append("PK")
+                    if col_name in indexed_columns:
+                        markers.append("IDX")
+                    marker_text = f"[{'/'.join(markers)}]" if markers else ""
+                    col_parts.append(f"{col_name}:{col_type}{marker_text}")
             lines.append(f"{table_name}({', '.join(col_parts)})")
+            if index_summaries:
+                lines.append(f"  indexes: {', '.join(index_summaries)}")
         return "\n".join(lines)
+
+    @staticmethod
+    def _extract_index_columns(index_definition: str) -> list[str]:
+        match = re.search(r"\((.+)\)", index_definition)
+        if not match:
+            return []
+
+        columns: list[str] = []
+        raw_items = [item.strip() for item in match.group(1).split(",") if item.strip()]
+        for item in raw_items:
+            cleaned = re.sub(
+                r"\s+(ASC|DESC|NULLS\s+FIRST|NULLS\s+LAST)\b",
+                "",
+                item,
+                flags=re.IGNORECASE,
+            )
+            cleaned = re.sub(r"\s+COLLATE\s+\S+", "", cleaned, flags=re.IGNORECASE).strip()
+            candidate = cleaned.split(".")[-1].strip().strip('"')
+            if re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", candidate):
+                columns.append(candidate)
+        return columns
 
     @staticmethod
     def extract_tool_data(payload: dict[str, Any]) -> dict[str, Any]:

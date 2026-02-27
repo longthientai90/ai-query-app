@@ -36,9 +36,12 @@ SQL Execution Progress:
    - Grouping or aggregation rules
 2. Ensure schema context is known:
    - If needed, call `postgres_get_schema` first
+   - Prefer schema annotations like `[PK]`, `[IDX]`, and `indexes:` when available
 3. Build PostgreSQL SQL that is read-only and minimal:
    - Prefer explicit columns over `SELECT *`
    - Use predicates and joins that match schema keys
+   - Prefer `[PK]`/`[IDX]` columns in `WHERE`, `JOIN ON`, and `ORDER BY`
+   - Keep predicates sargable (avoid wrapping indexed columns in functions in `WHERE`)
    - Add `ORDER BY` and `LIMIT` where appropriate
 4. Call `postgres_query` with generated SQL and params.
 5. Convert raw rows into a direct user answer.
@@ -46,6 +49,7 @@ SQL Execution Progress:
 ## Feedback Loop
 
 - If query returns validation/db error, revise SQL and retry once.
+- If query returns timeout, narrow filters and retry once with simpler/sargable predicates.
 - If results are empty, verify filters and time range before concluding no data.
 - If schema is unclear, fetch schema first instead of guessing columns.
 
@@ -58,7 +62,11 @@ SQL Execution Progress:
 
 ## Performance Guidelines
 
-- Select only needed columns.
-- Filter as early as possible.
-- Avoid cartesian joins.
-- Use indexed columns in `WHERE` and join predicates when possible.
+- Select only needed columns; never use `SELECT *` unless explicitly required.
+- Filter as early as possible in `WHERE`.
+- Avoid cartesian joins (always include a correct `ON` predicate).
+- Always prefer columns marked `[PK]` or `[IDX]` in `WHERE`, `JOIN ON`, and `ORDER BY`.
+- For foreign key filters, prefer filtering directly on indexed FK columns.
+- Keep expressions sargable: avoid `date_trunc(col)`, `lower(col)`, or casts on indexed columns inside `WHERE`.
+- For time windows, use range predicates (for example `col >= $1 AND col < $2`) instead of wrapping the column with functions.
+- Keep result sets bounded with `LIMIT` and stable sort when returning top-N.
