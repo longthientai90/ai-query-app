@@ -7,7 +7,7 @@
         </p>
         <h1 class="font-heading text-3xl font-bold text-slate-900">Insights Page</h1>
         <p class="mt-3 text-slate-600">
-          Placeholder page để bạn mở rộng thêm dashboard/analytics cho truy vấn.
+          Placeholder page for expanding query dashboards and analytics.
         </p>
       </section>
     </div>

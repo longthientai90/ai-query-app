@@ -26,7 +26,7 @@ const cards = [
           Query Platform Workspace
         </h1>
         <p class="mt-3 max-w-3xl text-slate-600">
-          Mỗi tính năng là một page độc lập, được tổ chức theo hướng chức năng. Chọn module bên dưới để bắt đầu.
+          Each feature is an independent page, organized by functional domain. Choose a module below to get started.
         </p>
       </section>
 

@@ -1,7 +1,7 @@
 <script setup>
 import { ref } from "vue";
 
-defineProps({
+const props = defineProps({
   loading: {
     type: Boolean,
     default: false,
@@ -13,14 +13,14 @@ const emit = defineEmits(["submit"]);
 const question = ref("");
 
 const submit = () => {
+  if (props.loading) return;
   emit("submit", question.value);
 };
 </script>
 
 <template>
-  <form
+  <div
     class="rounded-3xl border border-white/60 bg-white/75 p-4 shadow-card backdrop-blur-xl transition hover:shadow-glow sm:p-6"
-    @submit.prevent="submit"
   >
     <label for="search-input" class="mb-3 block font-heading text-lg font-semibold text-slate-800">
       Ask your data anything
@@ -29,14 +29,15 @@ const submit = () => {
       <textarea
         id="search-input"
         v-model="question"
-        rows="3"
+        rows="2"
         placeholder="Example: Top 5 products with highest price in 2024"
-        class="min-h-[120px] w-full resize-y rounded-2xl border border-brand-200 bg-white/95 px-4 py-3 text-base text-slate-800 outline-none transition focus:border-brand-500 focus:ring-4 focus:ring-brand-100"
-        @keydown.enter.exact.prevent="submit"
+        :disabled="loading"
+        class="w-full resize-y rounded-2xl border border-brand-200 bg-white/95 px-4 py-3 text-base text-slate-800 outline-none transition focus:border-brand-500 focus:ring-4 focus:ring-brand-100 disabled:cursor-not-allowed disabled:bg-slate-100 disabled:text-slate-500"
       />
       <button
-        type="submit"
+        type="button"
         :disabled="loading"
+        @click="submit"
         class="inline-flex min-w-[140px] items-center justify-center gap-2 rounded-2xl bg-gradient-to-r from-brand-600 to-brand-500 px-6 py-3 font-heading font-semibold text-white shadow-lg shadow-brand-500/30 transition hover:-translate-y-0.5 hover:from-brand-500 hover:to-brand-400 disabled:cursor-not-allowed disabled:opacity-70"
       >
         <span
@@ -58,6 +59,6 @@ const submit = () => {
         <span>{{ loading ? "Searching..." : "Search" }}</span>
       </button>
     </div>
-    <p class="mt-2 text-xs text-slate-500">Press Enter to submit quickly.</p>
-  </form>
+    <p class="mt-2 text-xs text-slate-500">You can enter multiple lines in the text box. Click Search to run the query.</p>
+  </div>
 </template>

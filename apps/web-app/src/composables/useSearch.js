@@ -9,6 +9,10 @@ export function useSearch() {
   const searchResult = ref(null);
 
   const runSearch = async (question) => {
+    if (isSearching.value) {
+      return searchResult.value;
+    }
+
     const query = question.trim();
     if (!query) {
       error.value = "Please enter a question before searching.";
