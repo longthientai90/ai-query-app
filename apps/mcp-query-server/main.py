@@ -56,6 +56,7 @@ def main() -> None:
             app,
             host=settings.MCP_HOST,
             port=settings.MCP_PORT,
+            ws="none",
         )
     else:
         mcp.run(transport=transport)

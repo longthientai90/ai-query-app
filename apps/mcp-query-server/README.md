@@ -5,6 +5,7 @@ PostgreSQL MCP Tool Server built with FastMCP. This service is intentionally rea
 ## Run locally
 
 ```bash
+cd .\apps\mcp-query-server
 python -m venv .venv
 .venv\Scripts\Activate
 pip install -r requirements.txt
