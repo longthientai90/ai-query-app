@@ -1,12 +1,14 @@
 <script setup>
+import { ref } from "vue";
 import SearchBar from "../components/ui/SearchBar.vue";
 import ResultTable from "../components/ui/ResultTable.vue";
 import { useSearch } from "../composables/useSearch";
 
-const { isSearching, error, searchResult, runSearch } = useSearch();
+const { isSearching, error, runSearch } = useSearch();
+const tableResult = ref(null);
 
 const onSubmit = async (question) => {
-  await runSearch(question);
+  tableResult.value = await runSearch(question);
 };
 </script>
 
@@ -45,9 +47,9 @@ const onSubmit = async (question) => {
         </div>
 
         <ResultTable
-          v-else-if="searchResult"
+          v-else-if="tableResult"
           key="table"
-          :result="searchResult"
+          :result="tableResult"
           :loading="isSearching"
           class="mt-6"
         />

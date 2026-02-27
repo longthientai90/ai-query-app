@@ -46,15 +46,19 @@ export function useSearch() {
       const rowCount = Number.isFinite(result.rowCount) ? result.rowCount : rows.length;
       const durationMs = Number.isFinite(result.durationMs) ? result.durationMs : null;
 
-      searchResult.value = {
+      const normalizedResult = {
         columns,
         rows,
         rowCount,
         durationMs,
       };
+
+      searchResult.value = normalizedResult;
+      return normalizedResult;
     } catch (err) {
       error.value = err instanceof Error ? err.message : "Unexpected error happened.";
       searchResult.value = null;
+      return null;
     } finally {
       isSearching.value = false;
     }
