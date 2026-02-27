@@ -1,0 +1,58 @@
+# Yêu cầu phát triển Front-end: Tính năng AI Search
+
+Bạn là một chuyên gia lập trình Front-end. Hãy viết code cho một ứng dụng web bằng **Vue 3** (sử dụng Composition API `<script setup>`) với cấu trúc được tổ chức tốt thành các components và composables (có thể dùng kèm TypeScript nếu thấy cần thiết).
+
+## 1. Yêu cầu chung về thiết kế (UI/UX)
+- Giao diện phải cực kỳ đẹp mắt, lôi cuốn, mang hơi hướng hiện đại của các ứng dụng AI (Premium UI).
+- Sử dụng màu sắc sắc nét, thiết kế sáng sủa (hoặc dark mode sang trọng), có hiệu ứng bóng đổ mượt mà (như glassmorphism), và có các gradient tinh tế.
+- Khuyến khích sử dụng **Tailwind CSS** để styling nhanh và đẹp, hoặc tự định nghĩa CSS hiện đại.
+- Có các hiệu ứng chuyển cảnh (transitions/animations) khi state thay đổi: trạng thái loading (spinner hoặc skeleton), hiệu ứng hover trên các item, hiệu ứng fade-in khi kết quả xuất hiện.
+
+## 2. Các chức năng và luồng hoạt động chính
+- **AI Search Component chính**: Giao diện bao trùm, có thể chiếm một khoảng lớn của màn hình. Trung tâm là phần nhập liệu.
+- **Thanh tìm kiếm (Search Bar)**: Một text input (hoặc textarea) lớn, nổi bật ngay giữa màn hình để người dùng nhập câu hỏi hoặc yêu cầu tìm kiếm. Đi kèm với một nút "Search" chứa icon, khi ấn nút tìm kiếm (hoặc gõ phím Enter) sẽ kích hoạt gọi API.
+- **Tích hợp API**:
+  - Khi bắt đầu gọi API, component phải hiển thị trạng thái `isSearching` (Loading indicator).
+  - Web sẽ gửi HTTP request (ví dụ dùng `fetch` hoặc `axios`) đến địa chỉ: `http://localhost:8080/api/search` (phương thức POST, truyền payload phù hợp với ô input ví dụ `{"question": "nội dung tìm kiếm"}`).
+
+## 3. Xử lý và hiển thị thông tin trả lời (Result Table)
+API sẽ trả về response có object Data dùng Cấu trúc Schema `ChatResponse`. Dưới đây là ví dụ của cục `result` nằm trong `ChatResponse`:
+
+```json
+"result": {
+    "rows": [
+        {
+            "product_name": "Fantastic Granite Ball",
+            "category_name": "Garden",
+            "product_price": "6069.59"
+        },
+        {
+            "product_name": "Oriental Bronze Chips",
+            "category_name": "Tools",
+            "product_price": "7456.55"
+        }
+    ],
+    "rowCount": 2,
+    "columns": [
+        "product_name",
+        "category_name",
+        "product_price"
+    ],
+    "durationMs": 16.37
+}
+```
+
+Nhiệm vụ của bạn là lấy dữ liệu từ `result` bên trong response trả về để hiển thị một Bảng Kết Quả (Table) linh hoạt (Dynamic Table):
+- **Cột của Bảng (Columns)**: Sử dụng mảng `result.columns` để tạo tiêu đề các cột (`thead`). Ví dụ ở trên sẽ chia 3 cột: `product_name`, `category_name`, `product_price`. Bạn nên có hàm xử lý format tên cột ra cho đẹp mắt (VD: "Product Name", "Category Name").
+- **Hàng (Rows)**: Lặp qua `result.rows` để in ra các dữ liệu tương ứng của mỗi hàng, match key theo tên của `columns`.
+- **Thống kê / Metadata**: Hãy hiển thị một dòng thông tin nhỏ ở trên hoặc dưới bảng: *hiển thị `rowCount` kết quả (truy vấn mất `durationMs` ms)*.
+- **Phong cách bảng (Table UI)**: Bảng không được dùng thẻ `<table>` mặc định khô khan, mà phải có khoảng cách đều đặn, bo góc (rounded corners), hiệu ứng hover khi di chuột qua mỗi dòng (trải nghiệm cao cấp). Cấu trúc bảng nên có độ phản hồi tốt (responsive layout).
+
+## 4. Gợi ý cấu trúc tổ chức mã nguồn
+Bạn hãy tổ chức thành các file nhỏ gọn, tách biệt trách nhiệm:
+1. `src/composables/useSearch.js` (hoặc `ts`): Chức năng chuyên gọi API, quản lý Loading State, Error State, lưu trữ `searchResult`.
+2. `src/components/ui/SearchBar.vue`: Hiển thị thanh Search. Nhận sự kiện emit khi user submit.
+3. `src/components/ui/ResultTable.vue`: Nhận truyền props là object `result` (có rows, columns) để render bảng.
+4. `src/components/AiSearch.vue` (hoặc App.vue): Tập hợp lại luồng, móc nối data từ `useSearch` phân bổ xuống các thành phần UI.
+
+Viết code hoàn chỉnh cho các file trên để tôi có thể tích hợp ngay vào dự án Vue của tôi nhé.
