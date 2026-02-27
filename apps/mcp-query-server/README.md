@@ -32,6 +32,14 @@ OTEL_EXPORTER_OTLP_ENDPOINT=http://otel-collector:4318
 OTEL_EXPORTER_OTLP_PROTOCOL=http/protobuf
 ```
 
+## Query timeout
+
+Set `DB_STATEMENT_TIMEOUT_MS` to cap execution time per SQL statement. The default is `15000` (15s).
+
+```env
+DB_STATEMENT_TIMEOUT_MS=15000
+```
+
 ## Read-only DB role grants
 
 ```sql

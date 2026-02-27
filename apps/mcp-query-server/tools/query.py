@@ -26,6 +26,7 @@ def register_query_tool(mcp, settings: Settings, logger, log_sql: bool = False) 
             with tracer.start_as_current_span("mcp.tool.postgres_query") as span:
                 span.set_attribute("db.system", "postgresql")
                 span.set_attribute("db.operation", "query")
+                span.set_attribute("db.statement_timeout_ms", settings.DB_STATEMENT_TIMEOUT_MS)
                 if max_rows is not None:
                     span.set_attribute("db.max_rows", max_rows)
                 try:
@@ -71,6 +72,24 @@ def register_query_tool(mcp, settings: Settings, logger, log_sql: bool = False) 
                     span.set_attribute("error", True)
                     span.set_attribute("error.type", "LimitExceededError")
                     return {"error": "limit", "reason": str(exc), "durationMs": round(t.ms, 2)}
+                except asyncpg.QueryCanceledError as exc:
+                    span.set_attribute("error", True)
+                    span.set_attribute("error.type", type(exc).__name__)
+                    logger.error(
+                        "tool_query_timeout",
+                        tool="postgres_query",
+                        sql_hash=sql_hash(sql),
+                        durationMs=round(t.ms, 2),
+                        timeoutMs=settings.DB_STATEMENT_TIMEOUT_MS,
+                        error=str(exc),
+                    )
+                    return {
+                        "error": "timeout",
+                        "message": str(exc),
+                        "code": getattr(exc, "sqlstate", None),
+                        "timeoutMs": settings.DB_STATEMENT_TIMEOUT_MS,
+                        "durationMs": round(t.ms, 2),
+                    }
                 except asyncpg.PostgresError as exc:
                     span.set_attribute("error", True)
                     span.set_attribute("error.type", type(exc).__name__)
