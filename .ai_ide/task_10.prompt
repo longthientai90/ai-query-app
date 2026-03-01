@@ -1,0 +1,37 @@
+# Yêu cầu công việc (Task 10)
+
+## Mục tiêu
+Cập nhật project NestJS trong thư mục `apps/service-ec` để chuyển đổi database từ MongoDB sang PostgreSQL. Đồng thời, xây dựng các API CRUD và chức năng sinh dữ liệu giả (fake data) cho hệ thống E-commerce.
+
+## Thông tin chi tiết
+- **Framework/Ngôn ngữ:** Node.js, NestJS.
+- **Thư mục làm việc chính:** `apps/service-ec`
+- **Database:** Chuyển từ MongoDB sang PostgreSQL.
+- **Cấu hình:** Tất cả thông tin kết nối database (Host, Port, Username, Password, Database name) và các cấu hình khác phải được đọc từ file `.env`.
+
+## Cấu trúc Entities
+Các entities cần tạo được định nghĩa trong file `infra/db_ec.sql`. Chúng bao gồm:
+1. `categories`: id, name, description, created_at, updated_at
+2. `products`: id, name, category_id, adjective, material, price, description, created_at, updated_at
+3. `users`: id, email, password_hash, first_name, last_name, phone, is_active, created_at, updated_at
+4. `orders`: id, user_id, status, total_amount, created_at, updated_at
+5. `order_items`: id, order_id, product_id, quantity, unit_price, created_at
+
+*Lưu ý: Bạn hãy đọc file `infra/db_ec.sql` để lấy chính xác kiểu dữ liệu và các ràng buộc (constraints, foreign keys) khi tạo các Entity classes tương ứng trong NestJS (sử dụng TypeORM hoặc ORM đang được dùng).*
+
+## Yêu cầu chức năng
+1. **CRUD APIs:**
+   Tạo Controller và Service cung cấp đầy đủ các API CRUD (Create, Read, Update, Delete) cho tất cả các entities trên.
+   
+2. **Fake Data (Seeding data):**
+   Tạo API hoặc script logic để tự động sinh dữ liệu giả cho ứng dụng E-commerce (seed categories, tiếp đến products, users, rồi orders và order_items).
+   - Sử dụng thư viện: [Faker.js](https://fakerjs.dev/guide/).
+   - Tham khảo tài liệu để sử dụng các module phù hợp như `faker.commerce.productName()`, `faker.commerce.price()`, `faker.commerce.productAdjective()`, `faker.commerce.productMaterial()`, v.v.
+   - Đảm bảo dữ liệu sinh ra có sự liên kết đúng qua các khóa ngoại (Foreign Keys).
+
+## Các bước thực hiện gợi ý cho Codex
+1. Phân tích source code hiện tại trong `apps/service-ec` để gỡ bỏ cấu hình MongoDB/Mongoose.
+2. Thêm và thiết lập module kết nối PostgreSQL (ví dụ TypeOrmModule kết hợp ConfigModule để đọc `.env`).
+3. Tạo các file Entity map chuẩn xác với các bảng trong `infra/db_ec.sql`. Thay thế code model MongoDB cũ.
+4. Cập nhật/viết mới Data Transfer Objects (DTO), Controllers, và Services để xử lý CRUD data trên PostgreSQL.
+5. Cài đặt thư viện `@faker-js/faker` (là dev dependency) và viết module/service dùng nó để sinh dữ liệu giả nạp vào database.
