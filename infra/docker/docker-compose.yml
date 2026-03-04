@@ -70,12 +70,12 @@ services:
 
   postgres:
     image: postgres:16.11
-    container_name: postgres_16
+    container_name: db_postgres
 
     environment:
       POSTGRES_USER: cmicadmin
       POSTGRES_PASSWORD: Scuti@12345
-      POSTGRES_DB: dify_platform
+      POSTGRES_DB: db_ec
 
     ports:
       - "5432:5432"
@@ -112,5 +112,6 @@ services:
     restart: unless-stopped
 
 volumes:
-  db-data: # Declare the named volume at the top-level
-    driver: local 
+  db-data:
+    # Declare the named volume at the top-level
+    driver: local

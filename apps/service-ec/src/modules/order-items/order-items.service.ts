@@ -17,7 +17,7 @@ export class OrderItemsService {
     private readonly orderRepository: Repository<Order>,
     @InjectRepository(Product)
     private readonly productRepository: Repository<Product>,
-  ) {}
+  ) { }
 
   async create(dto: CreateOrderItemDto) {
     // Validate order + product then persist new order item.
@@ -116,7 +116,7 @@ export class OrderItemsService {
   async fakerCreate(count: number, maxItemsPerOrder = 4) {
     // Generate faker order items and update order totals.
     const faker = await getFaker();
-    const requested = Math.max(1, Math.min(count, 300));
+    const requested = Math.max(1, Math.min(count, 5000));
     const orderLimit = Math.max(1, Math.min(maxItemsPerOrder, 10));
 
     const orders = await this.orderRepository.find({ select: ['id', 'totalAmount'] });
