@@ -1,0 +1,248 @@
+# Yeu cau cong viec (Task 11)
+
+## Muc tieu
+Thiet ke va trien khai mot service moi ten la `service-schema` de giai quyet bai toan schema retrieval cho he thong AI query hien tai.
+
+Muc tieu chinh:
+- Khong de `agent-core` gui full schema cua database len LLM nua
+- Co mot service chuyen biet de dong bo schema, luu trong memory, va truy xuat schema lien quan theo user query
+- Ho tro mo rong voi Qdrant cho semantic retrieval, nhung MVP van phai chay tot khi chi dung in-memory retrieval
+
+## Context he thong hien tai
+He thong hien co:
+- `apps/service-ec`: write API cho domain E-commerce
+- `apps/mcp-query-server`: read-only tools cho schema/query/explain
+- `apps/agent-core`: skill routing + SQL generation
+- PostgreSQL voi schema co the lon dan theo thoi gian
+
+Van de hien tai:
+- `agent-core` co the lay qua nhieu schema context
+- Neu database co rat nhieu bang, prompt se dai, ton token, va de lam LLM nhieu
+- Can tach retrieval schema thanh mot subsystem rieng
+
+## Yeu cau kien truc
+Ban hay xay dung thiet ke cho service moi:
+
+`service-schema`
+
+Vai tro cua service nay:
+1. Dong bo metadata schema tu PostgreSQL
+2. Chuan hoa schema thanh cac documents de tim kiem
+3. Luu va truy xuat nhanh trong memory
+4. Ho tro vector indexing voi Qdrant (optional)
+5. Tra ve compact schema context cho `agent-core`
+
+Service nay KHONG duoc:
+- chua business logic SQL generation
+- chua LLM logic
+- thay the `mcp-query-server`
+
+No chi la schema intelligence service.
+
+## Kien truc mong muon
+Luong du lieu mong muon:
+
+API Gateway
+  ↓
+Agent Core
+  ↓
+service-schema
+  ↓
+PostgreSQL metadata + optional Qdrant
+
+Va song song:
+
+Agent Core
+  ↓
+MCP Query Server
+  ↓
+PostgreSQL read replicas
+
+## Dinh huong thiet ke
+- Dung hybrid retrieval:
+  - lexical search
+  - relationship expansion theo FK graph
+  - optional vector search
+- In-memory la fast path chinh
+- Qdrant la optional enhancement, khong phai dependency bat buoc cho MVP
+- Retrieval phai uu tien practical va deterministic
+
+## Cac chuc nang service-schema phai ho tro
+
+### 1. Schema sync / reindex
+- Doc metadata bang, cot, PK, FK, index tu PostgreSQL
+- Normalize metadata thanh internal model
+- Build in-memory index
+- Optionally upsert embeddings vao Qdrant
+- Luu schema hash / version / last sync timestamp
+
+### 2. Schema search
+Input:
+- `query`
+- `max_tables`
+- `include_indexes`
+- `include_relationships`
+
+Output:
+- danh sach bang lien quan da duoc rank
+- danh sach cot lien quan
+- quan he join goi y
+- compact schema context text cho `agent-core`
+
+### 3. Table detail lookup
+- Lay full metadata cho 1 bang
+
+### 4. Health / diagnostics
+- cache age
+- so bang da index
+- schema hash
+- Qdrant enabled/disabled
+- last sync time
+
+## Yeu cau data model
+Ban can thiet ke internal model cho:
+- `TableMetadata`
+- `ColumnMetadata`
+- `ForeignKeyMetadata`
+- `IndexMetadata`
+- `SchemaDocument`
+- `SchemaSearchResult`
+- `SchemaContext`
+
+Can co kha nang luu:
+- aliases / synonyms
+- business tags
+- graph adjacency
+- compact prompt text
+
+## Yeu cau retrieval pipeline
+Hay thiet ke full pipeline nhu sau:
+1. normalize user query
+2. lexical search theo table/column/alias
+3. optional vector search tu Qdrant
+4. merge score
+5. expand theo FK relationships
+6. rank lai va cat top-N bang
+7. tao compact schema context
+8. tra ket qua cho `agent-core`
+
+Can co cach gioi han prompt size ro rang:
+- chi gui top-N bang
+- chi gui cac cot quan trong
+- chi gui index khi can
+- co fallback neu retrieval qua rong
+
+## API contract mong muon
+Ban hay thiet ke va code theo huong co cac endpoint:
+
+1. `POST /schema/reindex`
+2. `POST /schema/search`
+3. `GET /schema/tables/{table_name}`
+4. `GET /schema/health`
+
+Can mo ta request/response shape ro rang.
+
+## Tich hop voi agent-core
+Can de xuat cach tich hop:
+- `agent-core` goi `service-schema` truoc khi generate SQL
+- `query-expert` va `performance-tuner` khong nen fetch full schema nua
+- `schema-analyzer` co the dung service nay de list / summarize schema
+- `mcp-query-server:postgres_get_schema` van co the giu lam fallback cho exact detail hoac refresh
+
+## Yeu cau ve ranking
+Can co strategy practical, de implement:
+- bonus cho match ten bang
+- bonus cho match ten cot
+- bonus cho synonym/business keyword
+- bonus cho vector similarity
+- bonus cho bang co FK lien quan
+- penalty cho bang low-signal nhu logs/audit/config neu khong lien quan
+
+## Failure / fallback strategy
+Phai xu ly:
+- Qdrant unavailable
+- schema sync fail mot phan
+- stale cache
+- khong tim thay bang phu hop
+- retrieval ra qua nhieu bang
+
+He thong phai degrade gracefully va van tra duoc ket qua useful.
+
+## Observability
+Can co:
+- retrieval latency
+- sync duration
+- number of indexed tables
+- Qdrant usage ratio
+- top candidate count truoc/sau rerank
+- cache age
+- logs cho sync, search, fallback
+
+## Tech stack de xuat
+- Python 3.11+
+- FastAPI
+- Pydantic
+- asyncpg hoac psycopg
+- optional Qdrant client
+- in-memory indexes tu Python structures
+- Docker support
+
+## Cau truc thu muc de xuat
+Hay to chuc code clean, vi du:
+
+`apps/service-schema/`
+- `main.py`
+- `config.py`
+- `api/`
+- `db/`
+- `models/`
+- `sync/`
+- `indexing/`
+- `retrieval/`
+- `context_builder/`
+- `tests/`
+
+Neu ban thay co cau truc tot hon thi de xuat va giai thich.
+
+## Pham vi implementation mong muon
+Hay lap ke hoach va code theo 4 phase:
+
+### Phase 1: MVP in-memory
+- sync schema
+- build lexical indexes
+- support `/schema/search`
+- tra compact schema context
+
+### Phase 2: Agent integration
+- sua `agent-core` de goi `service-schema`
+- giam full schema prompt
+
+### Phase 3: Qdrant hybrid retrieval
+- add embeddings
+- merge lexical + vector ranking
+
+### Phase 4: hardening
+- observability
+- schema hash
+- reindex workflow
+- better ranking tuning
+
+## Deliverables mong muon
+Code / thiet ke phai bao gom:
+1. High-level architecture
+2. Folder structure
+3. Internal data model
+4. Retrieval pipeline
+5. API contracts
+6. Integration strategy voi `agent-core`
+7. Failure strategy
+8. Metrics / logging
+9. Implementation phases
+10. Acceptance criteria
+
+## Output mong muon
+Hay tao mot implementation-ready design va code skeleton practical, uu tien:
+- kha nang mo rong
+- de maintain
+- de test
+- giam prompt size cho LLM trong bai toan schema lon
