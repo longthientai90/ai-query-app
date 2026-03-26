@@ -21,16 +21,28 @@ npm install
 PORT=3000
 
 # Database
+# service-ec is a write service, so it must connect to the primary node.
+# If you run PostgreSQL from infra/docker on the host machine, keep localhost:5432.
 DB_HOST=localhost
 DB_PORT=5432
-DB_USER=postgres
-DB_PASSWORD=postgres
+DB_USER=cmicadmin
+DB_PASSWORD=Scuti@12345
 DB_NAME=db_ec
 
 # Optional
 DB_SSL=false
 DB_SYNC=false
 DB_LOGGING=false
+```
+
+If `service-ec` runs inside Docker on the same compose network, use:
+
+```dotenv
+DB_HOST=postgres-primary
+DB_PORT=5432
+DB_USER=cmicadmin
+DB_PASSWORD=Scuti@12345
+DB_NAME=db_ec
 ```
 
 3. Run the service:

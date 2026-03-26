@@ -1,19 +1,104 @@
 version: "3.9"
+
 services:
-  postgres:
-    image: postgres:15
+  postgres-primary:
+    image: bitnamilegacy/postgresql-repmgr:17.6.0-debian-12-r2
+    container_name: postgres-primary
+    hostname: postgres-node-1
     environment:
-      POSTGRES_DB: devdb
-      POSTGRES_USER: mcp_readonly
-      POSTGRES_PASSWORD: secret
+      POSTGRESQL_POSTGRES_PASSWORD: postgres
+      POSTGRESQL_USERNAME: mcp_readonly
+      POSTGRESQL_PASSWORD: secret
+      POSTGRESQL_DATABASE: devdb
+      REPMGR_PASSWORD: repmgrsecret
+      REPMGR_PRIMARY_HOST: postgres-node-1
+      REPMGR_PARTNER_NODES: postgres-node-1,postgres-node-2,postgres-node-3
+      REPMGR_NODE_NAME: postgres-node-1
+      REPMGR_NODE_NETWORK_NAME: postgres-node-1
+      REPMGR_NODE_ID: "1"
     ports:
       - "5432:5432"
+    volumes:
+      - postgres-primary-data:/bitnami/postgresql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d devdb -h 127.0.0.1 -p 5432"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  postgres-replica-1:
+    image: bitnamilegacy/postgresql-repmgr:17.6.0-debian-12-r2
+    container_name: postgres-rep1
+    hostname: postgres-node-2
+    environment:
+      POSTGRESQL_POSTGRES_PASSWORD: postgres
+      POSTGRESQL_USERNAME: mcp_readonly
+      POSTGRESQL_PASSWORD: secret
+      POSTGRESQL_DATABASE: devdb
+      REPMGR_PASSWORD: repmgrsecret
+      REPMGR_PRIMARY_HOST: postgres-node-1
+      REPMGR_PARTNER_NODES: postgres-node-1,postgres-node-2,postgres-node-3
+      REPMGR_NODE_NAME: postgres-node-2
+      REPMGR_NODE_NETWORK_NAME: postgres-node-2
+      REPMGR_NODE_ID: "2"
+    depends_on:
+      postgres-primary:
+        condition: service_healthy
+    ports:
+      - "5433:5432"
+    volumes:
+      - postgres-replica-1-data:/bitnami/postgresql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d devdb -h 127.0.0.1 -p 5432"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  postgres-replica-2:
+    image: bitnamilegacy/postgresql-repmgr:17.6.0-debian-12-r2
+    container_name: postgres-rep2
+    hostname: postgres-node-3
+    environment:
+      POSTGRESQL_POSTGRES_PASSWORD: postgres
+      POSTGRESQL_USERNAME: mcp_readonly
+      POSTGRESQL_PASSWORD: secret
+      POSTGRESQL_DATABASE: devdb
+      REPMGR_PASSWORD: repmgrsecret
+      REPMGR_PRIMARY_HOST: postgres-node-1
+      REPMGR_PARTNER_NODES: postgres-node-1,postgres-node-2,postgres-node-3
+      REPMGR_NODE_NAME: postgres-node-3
+      REPMGR_NODE_NETWORK_NAME: postgres-node-3
+      REPMGR_NODE_ID: "3"
+    depends_on:
+      postgres-primary:
+        condition: service_healthy
+    ports:
+      - "5434:5432"
+    volumes:
+      - postgres-replica-2-data:/bitnami/postgresql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d devdb -h 127.0.0.1 -p 5432"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
 
   mcp-query-server:
     build: .
     env_file: .env
+    environment:
+      DATABASE_URL: postgresql://mcp_readonly:secret@postgres-primary:5432/devdb
+      READONLY_DATABASE_URLS: postgresql://mcp_readonly:secret@postgres-replica-1:5432/devdb,postgresql://mcp_readonly:secret@postgres-replica-2:5432/devdb
     ports:
       - "8000:8000"
     depends_on:
-      - postgres
+      postgres-primary:
+        condition: service_healthy
+      postgres-replica-1:
+        condition: service_healthy
+      postgres-replica-2:
+        condition: service_healthy
 
+volumes:
+  postgres-primary-data:
+  postgres-replica-1-data:
+  postgres-replica-2-data:

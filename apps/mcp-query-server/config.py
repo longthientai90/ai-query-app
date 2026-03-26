@@ -2,8 +2,10 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 class Settings(BaseSettings):
-    # Connection string should use a dedicated read-only role.
+    # Primary DSN is kept for compatibility and future admin workflows.
     DATABASE_URL: str
+    # Comma-separated read replica DSNs used by query/schema/explain paths.
+    READONLY_DATABASE_URLS: str
     DB_POOL_MIN: int = 2
     DB_POOL_MAX: int = 10
     # PostgreSQL statement_timeout in milliseconds (0 disables timeout).

@@ -7,6 +7,8 @@ services:
   #   env_file:
   #     - ../../apps/mcp-query-server/.env
   #   environment:
+  #     DATABASE_URL: postgresql://cmicadmin:Scuti%4012345@postgres-primary:5432/db_ec
+  #     READONLY_DATABASE_URLS: postgresql://cmicadmin:Scuti%4012345@postgres-replica-1:5432/db_ec,postgresql://cmicadmin:Scuti%4012345@postgres-replica-2:5432/db_ec
   #     MCP_HOST: 0.0.0.0
   #     MCP_PORT: 8000
   #     MCP_TRANSPORT: http
@@ -68,26 +70,86 @@ services:
   #     - "8080:8080"
   #   restart: unless-stopped
 
-  postgres:
-    image: postgres:16.11
-    container_name: db_postgres
-
+  postgres-primary:
+    image: bitnamilegacy/postgresql-repmgr:17.6.0-debian-12-r2
+    container_name: postgres-primary
+    hostname: postgres-node-1
     environment:
-      POSTGRES_USER: cmicadmin
-      POSTGRES_PASSWORD: Scuti@12345
-      POSTGRES_DB: db_ec
-
+      POSTGRESQL_POSTGRES_PASSWORD: postgres
+      POSTGRESQL_USERNAME: cmicadmin
+      POSTGRESQL_PASSWORD: Scuti@12345
+      POSTGRESQL_DATABASE: db_ec
+      REPMGR_PASSWORD: repmgrsecret
+      REPMGR_PRIMARY_HOST: postgres-node-1
+      REPMGR_PARTNER_NODES: postgres-node-1,postgres-node-2,postgres-node-3
+      REPMGR_NODE_NAME: postgres-node-1
+      REPMGR_NODE_NETWORK_NAME: postgres-node-1
+      REPMGR_NODE_ID: "1"
     ports:
       - "5432:5432"
-
     volumes:
-      - db-data:/var/lib/postgresql/data
-
+      - db-primary-data:/bitnami/postgresql
     healthcheck:
-      test: [ "CMD-SHELL", "pg_isready -U cmicadmin" ]
+      test: ["CMD-SHELL", "pg_isready -U postgres -d db_ec -h 127.0.0.1 -p 5432"]
       interval: 10s
       timeout: 5s
-      retries: 5
+      retries: 10
+
+  postgres-replica-1:
+    image: bitnamilegacy/postgresql-repmgr:17.6.0-debian-12-r2
+    container_name: postgres-rep1
+    hostname: postgres-node-2
+    environment:
+      POSTGRESQL_POSTGRES_PASSWORD: postgres
+      POSTGRESQL_USERNAME: cmicadmin
+      POSTGRESQL_PASSWORD: Scuti@12345
+      POSTGRESQL_DATABASE: db_ec
+      REPMGR_PASSWORD: repmgrsecret
+      REPMGR_PRIMARY_HOST: postgres-node-1
+      REPMGR_PARTNER_NODES: postgres-node-1,postgres-node-2,postgres-node-3
+      REPMGR_NODE_NAME: postgres-node-2
+      REPMGR_NODE_NETWORK_NAME: postgres-node-2
+      REPMGR_NODE_ID: "2"
+    depends_on:
+      postgres-primary:
+        condition: service_healthy
+    ports:
+      - "5433:5432"
+    volumes:
+      - db-replica-1-data:/bitnami/postgresql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d db_ec -h 127.0.0.1 -p 5432"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  postgres-replica-2:
+    image: bitnamilegacy/postgresql-repmgr:17.6.0-debian-12-r2
+    container_name: postgres-rep2
+    hostname: postgres-node-3
+    environment:
+      POSTGRESQL_POSTGRES_PASSWORD: postgres
+      POSTGRESQL_USERNAME: cmicadmin
+      POSTGRESQL_PASSWORD: Scuti@12345
+      POSTGRESQL_DATABASE: db_ec
+      REPMGR_PASSWORD: repmgrsecret
+      REPMGR_PRIMARY_HOST: postgres-node-1
+      REPMGR_PARTNER_NODES: postgres-node-1,postgres-node-2,postgres-node-3
+      REPMGR_NODE_NAME: postgres-node-3
+      REPMGR_NODE_NETWORK_NAME: postgres-node-3
+      REPMGR_NODE_ID: "3"
+    depends_on:
+      postgres-primary:
+        condition: service_healthy
+    ports:
+      - "5434:5432"
+    volumes:
+      - db-replica-2-data:/bitnami/postgresql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d db_ec -h 127.0.0.1 -p 5432"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
 
   otel-collector:
     image: otel/opentelemetry-collector-contrib:0.117.0
@@ -112,6 +174,9 @@ services:
     restart: unless-stopped
 
 volumes:
-  db-data:
-    # Declare the named volume at the top-level
+  db-primary-data:
+    driver: local
+  db-replica-1-data:
+    driver: local
+  db-replica-2-data:
     driver: local
