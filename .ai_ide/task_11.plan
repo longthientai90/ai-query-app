@@ -1,0 +1,327 @@
+You are Antigravity, an expert AI systems architect.
+
+Create a detailed engineering implementation plan for:
+
+"service-schema"
+
+Context
+-------
+The current system has:
+
+- `service-ec` (write API for e-commerce domain)
+- `mcp-query-server` (read-only schema/query/explain tools)
+- `agent-core` (skill routing + SQL generation)
+- PostgreSQL with growing schema size
+
+Current problem:
+
+- `agent-core` can fetch broad schema context and send too much schema to the LLM
+- this will not scale well for databases with hundreds of tables
+- schema retrieval should become a dedicated subsystem
+
+New goal
+--------
+Design a new service called `service-schema` that:
+
+1. Loads database schema metadata into memory
+2. Stores searchable schema representations
+3. Supports retrieval by user question
+4. Returns only the most relevant schema context to `agent-core`
+5. Optionally uses vector search with Qdrant
+6. Can be refreshed/reindexed when schema changes
+
+The service is NOT an LLM service.
+It is a schema intelligence and retrieval service.
+
+Target architecture
+-------------------
+
+API Gateway
+  ↓
+Agent Core
+  ↓
+service-schema (THIS SERVICE)
+  ↓
+PostgreSQL metadata + optional Qdrant
+
+Separately:
+
+Agent Core
+  ↓
+MCP Query Server
+  ↓
+PostgreSQL read replicas
+
+Design principles
+-----------------
+
+- Keep schema retrieval outside `agent-core`
+- Do not send full database schema to the LLM by default
+- Prefer hybrid retrieval:
+  - lexical search
+  - graph expansion by FK relationships
+  - optional vector search
+- Use memory as the fast runtime store
+- Use Qdrant as optional semantic retrieval layer, not the only retrieval layer
+- Make the service implementation-friendly and incremental
+
+Functional requirements
+-----------------------
+
+The service must support:
+
+1) Schema sync / index build
+   - load tables, columns, PKs, FKs, indexes
+   - normalize metadata into internal documents
+   - build in-memory search structures
+   - optionally upsert embeddings into Qdrant
+
+2) Schema search
+   Input:
+   - user query
+   - max_tables
+   - include_indexes
+   - include_relationships
+
+   Output:
+   - ranked relevant tables
+   - ranked relevant columns
+   - inferred join relationships
+   - compact schema context text suitable for `agent-core`
+
+3) Table detail lookup
+   - get full metadata for one table
+
+4) Health / diagnostics
+   - cache status
+   - index version / schema hash
+   - sync timestamp
+   - whether Qdrant is enabled
+
+Non-functional requirements
+---------------------------
+
+- Fast local response for search
+- Deterministic lexical retrieval even when vector store is unavailable
+- Safe operation without any write access to business tables
+- Clear observability and debuggability
+- Works first without Qdrant, then can be extended to hybrid retrieval
+
+Key design question
+-------------------
+
+The plan must answer:
+
+"How do we reduce full-schema prompt size while still retrieving the right tables and columns for natural language questions?"
+
+Required deliverables in the PLAN
+---------------------------------
+
+1. High-level architecture diagram
+2. Recommended folder structure
+3. Internal data model
+4. In-memory indexing strategy
+5. Optional Qdrant integration strategy
+6. Retrieval pipeline design
+7. Schema sync / refresh design
+8. API contract design
+9. Integration plan for `agent-core`
+10. Ranking / scoring strategy
+11. Failure and fallback strategy
+12. Observability / metrics
+13. Implementation phases
+14. Milestones and acceptance criteria
+
+Detailed design expectations
+----------------------------
+
+1) High-level architecture
+
+Describe:
+
+- `schema-loader`
+- `schema-normalizer`
+- `schema-store`
+- `schema-retriever`
+- `schema-context-builder`
+- `qdrant-indexer` (optional)
+- HTTP API layer
+
+Show how they interact.
+
+2) Folder structure
+
+Propose a clean implementation structure, for example:
+
+`apps/service-schema/`
+  `main.py`
+  `config.py`
+  `api/`
+  `schema_store/`
+  `retrieval/`
+  `indexing/`
+  `db/`
+  `models/`
+  `tests/`
+
+But improve it if needed.
+
+Explain module responsibilities clearly.
+
+3) Internal data model
+
+Design normalized models for:
+
+- table metadata
+- column metadata
+- foreign key relationships
+- index metadata
+- searchable documents
+- retrieval result
+- compact prompt context
+
+Include suggestions for:
+
+- aliases / synonyms
+- business tags
+- graph adjacency
+- schema hash / versioning
+
+4) In-memory indexing strategy
+
+Design at least:
+
+- table name index
+- column name index
+- keyword/token index
+- relationship graph
+- compact schema cache
+
+The plan should explain how the service can answer most requests without vector search.
+
+5) Qdrant integration strategy
+
+Design an optional semantic layer:
+
+- what gets embedded
+- chunk granularity (per table, maybe not per column initially)
+- payload metadata to store in Qdrant
+- when vector retrieval is invoked
+- how vector scores are merged with lexical scores
+
+Be explicit that Qdrant is optional for MVP.
+
+6) Retrieval pipeline design
+
+Design the full query pipeline for a user question:
+
+1. normalize query
+2. lexical candidate search
+3. optional vector candidate search
+4. merge/rerank
+5. relationship expansion
+6. compact context builder
+7. response payload for `agent-core`
+
+Explain how to cap prompt size and number of tables.
+
+7) Schema sync / refresh design
+
+Design:
+
+- startup load
+- manual reindex endpoint
+- scheduled refresh option
+- schema hash comparison
+- partial vs full rebuild
+
+Include when embeddings must be regenerated.
+
+8) API contract design
+
+Define practical endpoints such as:
+
+- `POST /schema/reindex`
+- `POST /schema/search`
+- `GET /schema/tables/{table_name}`
+- `GET /schema/health`
+
+For each endpoint, include request/response shape and purpose.
+
+9) Integration plan for `agent-core`
+
+Design how `agent-core` should change:
+
+- call `service-schema` before SQL generation
+- stop calling `postgres_get_schema` broadly for normal query flow
+- use returned compact schema context for prompt building
+- optionally still call `postgres_get_schema` as fallback for exact detail
+
+Describe which current paths should change:
+
+- `query-expert`
+- `performance-tuner`
+- `schema-analyzer`
+
+10) Ranking / scoring strategy
+
+Propose a simple, practical ranking formula that combines:
+
+- table-name keyword matches
+- column-name matches
+- synonym matches
+- vector similarity
+- relationship expansion bonus
+- penalties for low-signal utility tables
+
+This should be implementation-friendly, not research-heavy.
+
+11) Failure and fallback strategy
+
+Design fallback behavior for:
+
+- Qdrant unavailable
+- partial schema sync failure
+- stale cache
+- no candidate tables found
+- retrieval too broad
+
+The system must degrade gracefully.
+
+12) Observability / metrics
+
+Suggest logs and metrics such as:
+
+- retrieval latency
+- sync duration
+- number of tables indexed
+- Qdrant usage ratio
+- candidate count before/after rerank
+- schema cache age
+
+13) Implementation phases
+
+Create step-by-step phases:
+
+- Phase 1: MVP in-memory only
+- Phase 2: `agent-core` integration
+- Phase 3: Qdrant hybrid retrieval
+- Phase 4: tuning and operational hardening
+
+Each phase should include concrete tasks.
+
+14) Milestones and acceptance criteria
+
+Define what "done" means for each phase.
+
+Output format
+-------------
+
+Produce a practical implementation plan that Codex can implement directly.
+
+The plan should be:
+
+- detailed
+- modular
+- realistic for incremental delivery
+- suitable for a production-oriented internal AI data platform
