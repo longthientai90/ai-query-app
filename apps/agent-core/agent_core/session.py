@@ -33,14 +33,22 @@ class AgentSession:
     session_id: str
     messages: list[Message] = field(default_factory=list)
     tool_events: list[ToolEvent] = field(default_factory=list)
+    # Used by agent-level eviction to bound memory in long-lived HTTP workers.
+    last_touched: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
+
+    def touch(self) -> None:
+        self.last_touched = datetime.now(timezone.utc)
 
     def push_user(self, content: str) -> None:
+        self.touch()
         self.messages.append(Message(role="user", content=content))
 
     def push_assistant(self, content: str) -> None:
+        self.touch()
         self.messages.append(Message(role="assistant", content=content))
 
     def push_tool(self, name: str, arguments: dict[str, Any], result_summary: dict[str, Any]) -> None:
+        self.touch()
         self.tool_events.append(ToolEvent(name=name, arguments=arguments, result_summary=result_summary))
 
     def trim(self, keep_last_messages: int) -> None:
@@ -52,5 +60,6 @@ class AgentSession:
 
     def as_chat_context(self, keep_last_messages: int) -> list[dict[str, str]]:
         """Expose session history in LLM-ready chat format."""
+        self.touch()
         messages = self.messages[-keep_last_messages:] if keep_last_messages > 0 else self.messages
         return [{"role": m.role, "content": m.content} for m in messages]

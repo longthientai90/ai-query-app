@@ -6,6 +6,7 @@ import json
 import re
 import time
 import uuid
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from opentelemetry import trace
@@ -194,6 +195,7 @@ class Agent:
             query_data: dict[str, Any]
             retry_count = 0
             while True:
+                # Always execute the current candidate SQL before deciding whether a retry is warranted.
                 with tracer.start_as_current_span("agent.mcp.postgres_query"):
                     query_payload = await self.mcp_client.call_tool(
                         "postgres_query",
@@ -215,6 +217,8 @@ class Agent:
                     break
 
                 retry_count += 1
+                # Feed the last failure back into SQL generation so the retry preserves intent
+                # while avoiding the same DB/timeout failure mode.
                 retry_message = query_data.get("message") if isinstance(query_data, dict) else None
                 retry_reason = query_data.get("reason") if isinstance(query_data, dict) else None
                 retry_code = query_data.get("code") if isinstance(query_data, dict) else None
@@ -286,24 +290,81 @@ class Agent:
                     "postgres_explain",
                     {"sql": sql, "params": params, "analyze": False},
                 )
-            explain_data = self.extract_tool_data(explain_payload)
+            baseline_plan = self.extract_tool_data(explain_payload)
             session.push_tool(
                 "postgres_explain",
                 {"sql": sql, "params": params, "analyze": False},
-                self._summarize_result(explain_data),
+                self._summarize_result(baseline_plan),
             )
+
+            # Keep the original SQL as the default outcome and only replace it when the
+            # rewrite path actually produces a different candidate plus a second plan.
+            optimized_sql = sql
+            optimized_params = params
+            optimized_plan = baseline_plan
+            optimization_reason = "no-rewrite"
+
+            if not baseline_plan.get("error"):
+                # Reuse the SQL generator with plan context so the skill can propose a
+                # rewrite without adding a second specialized LLM prompt path.
+                rewrite_context = (
+                    f"{question}\n\n"
+                    f"Current SQL:\n{sql}\n\n"
+                    "Review the baseline EXPLAIN result and produce a safer/faster rewrite only if justified.\n"
+                    f"Baseline EXPLAIN: {json.dumps(baseline_plan, ensure_ascii=False, default=str)}"
+                )
+                with tracer.start_as_current_span("agent.generate_sql_rewrite"):
+                    candidate_sql, candidate_params, candidate_reason = await self.llm_client.generate_sql(
+                        question=rewrite_context,
+                        skill=skill,
+                        schema_text=schema_text,
+                        history=session.as_chat_context(self.settings.AGENT_HISTORY_LIMIT),
+                        max_rows=max_rows,
+                    )
+
+                if candidate_sql.strip() != sql.strip() or candidate_params != params:
+                    with tracer.start_as_current_span("agent.mcp.postgres_explain_rewrite"):
+                        optimized_payload = await self.mcp_client.call_tool(
+                            "postgres_explain",
+                            {"sql": candidate_sql, "params": candidate_params, "analyze": False},
+                        )
+                    optimized_plan = self.extract_tool_data(optimized_payload)
+                    session.push_tool(
+                        "postgres_explain",
+                        {"sql": candidate_sql, "params": candidate_params, "analyze": False},
+                        self._summarize_result(optimized_plan),
+                    )
+                    optimized_sql = candidate_sql
+                    optimized_params = candidate_params
+                    optimization_reason = candidate_reason
+
+            # Return both baseline and optimized views so callers can inspect the full tuning story.
+            explain_data = {
+                "baseline": {
+                    "sql": sql,
+                    "params": params,
+                    "plan": baseline_plan,
+                },
+                "optimized": {
+                    "sql": optimized_sql,
+                    "params": optimized_params,
+                    "plan": optimized_plan,
+                    "reason": optimization_reason,
+                    "changed": optimized_sql != sql or optimized_params != params,
+                },
+            }
             with tracer.start_as_current_span("agent.summarize_answer"):
                 answer = await self.llm_client.summarize_answer(
                     question=question,
                     skill_name=skill.name,
-                    sql=sql,
+                    sql=optimized_sql,
                     result=explain_data,
                 )
             return {
                 "question": question,
                 "answer": answer,
-                "sql": sql,
-                "params": params,
+                "sql": optimized_sql,
+                "params": optimized_params,
                 "result": explain_data,
             }
 
@@ -329,6 +390,8 @@ class Agent:
             if cache_valid:
                 return cached_data
 
+            # Cache schema by include_indexes mode because query generation and schema-only
+            # inspection need different metadata density.
             payload = await self.mcp_client.call_tool(
                 "postgres_get_schema",
                 {"tables": None, "include_indexes": include_indexes},
@@ -354,6 +417,8 @@ class Agent:
             if not isinstance(table_name, str) or not isinstance(columns, list):
                 continue
 
+            # Extract index column hints into the schema text so SQL generation can prefer
+            # sargable predicates and join keys without seeing the raw DDL.
             indexed_columns: set[str] = set()
             index_summaries: list[str] = []
             if isinstance(indexes, list):
@@ -450,9 +515,34 @@ class Agent:
 
     def _get_session(self, session_id: str) -> AgentSession:
         """Return existing session or create a new one lazily."""
+        # Evict before lookup so long-running workers do not retain idle sessions forever.
+        self._evict_stale_sessions()
         existing = self.sessions.get(session_id)
         if existing:
+            existing.touch()
             return existing
         session = AgentSession(session_id=session_id)
         self.sessions[session_id] = session
+        self._evict_excess_sessions()
         return session
+
+    def _evict_stale_sessions(self) -> None:
+        ttl = self.settings.AGENT_SESSION_TTL_SEC
+        if ttl <= 0 or not self.sessions:
+            return
+
+        cutoff = datetime.now(timezone.utc) - timedelta(seconds=ttl)
+        stale_ids = [sid for sid, session in self.sessions.items() if session.last_touched < cutoff]
+        for sid in stale_ids:
+            self.sessions.pop(sid, None)
+
+    def _evict_excess_sessions(self) -> None:
+        max_sessions = self.settings.AGENT_MAX_SESSIONS
+        if max_sessions <= 0 or len(self.sessions) <= max_sessions:
+            return
+
+        # Trim oldest sessions first so active conversations keep their accumulated context.
+        overflow = len(self.sessions) - max_sessions
+        oldest_sessions = sorted(self.sessions.items(), key=lambda item: item[1].last_touched)[:overflow]
+        for sid, _ in oldest_sessions:
+            self.sessions.pop(sid, None)

@@ -173,7 +173,16 @@ class LLMClient:
         if not self.enabled:
             return self._heuristic_summary(question=question, skill_name=skill_name, rows=rows, row_count=row_count)
 
-        compact_rows = self._compact_rows(rows, max_rows=12, max_chars=self.settings.AGENT_MAX_VALUE_CHARS)
+        # Keep the prompt compact: preview a bounded set of rows and a truncated result payload.
+        compact_rows = self._compact_rows(
+            rows,
+            max_rows=self.settings.AGENT_MAX_ROWS_TO_SUMMARIZE,
+            max_chars=self.settings.AGENT_MAX_VALUE_CHARS,
+        )
+        result_preview = self._truncate_text(
+            json.dumps(result, ensure_ascii=False, default=str),
+            max_chars=4000,
+        )
         messages = [
             {
                 "role": "system",
@@ -189,7 +198,8 @@ class LLMClient:
                     f"Question: {question}\n"
                     f"SQL: {sql or '(none)'}\n"
                     f"Row count: {row_count}\n"
-                    f"Rows preview: {json.dumps(compact_rows, ensure_ascii=True)}"
+                    f"Rows preview: {json.dumps(compact_rows, ensure_ascii=False, default=str)}\n"
+                    f"Result preview: {result_preview}"
                 ),
             },
         ]
@@ -266,6 +276,7 @@ class LLMClient:
 
     async def _chat_json(self, *, messages: list[dict[str, str]], max_tokens: int) -> dict[str, Any]:
         """Force JSON mode and parse into a dict."""
+        # Route/generate paths depend on machine-readable output, so fail fast on non-JSON text.
         content = await self._chat_text(messages=messages, max_tokens=max_tokens, json_mode=True)
         try:
             parsed = json.loads(content)
@@ -301,7 +312,12 @@ class LLMClient:
             if json_mode:
                 kwargs["response_format"] = {"type": "json_object"}
 
+            # Centralize the provider call here so tracing and response validation stay consistent
+            # across router, SQL generation, and answer summarization.
             completion = await self.client.chat.completions.create(**kwargs)
+            if not completion.choices:
+                span.set_attribute("error", True)
+                raise LLMClientError("LLM returned no choices")
             content = completion.choices[0].message.content
             if not content:
                 span.set_attribute("error", True)
@@ -315,6 +331,7 @@ class LLMClient:
             if not isinstance(row, dict):
                 compacted.append(row)
                 continue
+            # Trim oversized string values so large text/blob fields do not dominate the prompt.
             compact_row: dict[str, Any] = {}
             for key, value in row.items():
                 if isinstance(value, str) and len(value) > max_chars:
@@ -323,3 +340,9 @@ class LLMClient:
                     compact_row[key] = value
             compacted.append(compact_row)
         return compacted
+
+    @staticmethod
+    def _truncate_text(value: str, *, max_chars: int) -> str:
+        if len(value) <= max_chars:
+            return value
+        return value[: max_chars - 3] + "..."

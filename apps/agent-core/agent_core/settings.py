@@ -39,6 +39,8 @@ class AgentCoreSettings(BaseSettings):
     AZURE_OPENAI_DEPLOYMENT: str | None = None
 
     AGENT_HISTORY_LIMIT: int = 20
+    AGENT_MAX_SESSIONS: int = 500
+    AGENT_SESSION_TTL_SEC: int = 3600
     AGENT_SCHEMA_CACHE_TTL_SEC: int = 300
     AGENT_MAX_ROWS_TO_SUMMARIZE: int = 25
     AGENT_MAX_VALUE_CHARS: int = 200
