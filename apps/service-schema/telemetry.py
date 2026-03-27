@@ -4,10 +4,14 @@ from fastapi import FastAPI
 from opentelemetry import trace
 from opentelemetry.exporter.otlp.proto.http.trace_exporter import OTLPSpanExporter
 from opentelemetry.instrumentation.fastapi import FastAPIInstrumentor
-from opentelemetry.instrumentation.httpx import HTTPXClientInstrumentor
 from opentelemetry.sdk.resources import Resource
 from opentelemetry.sdk.trace import TracerProvider
 from opentelemetry.sdk.trace.export import BatchSpanProcessor
+
+try:
+    from opentelemetry.instrumentation.httpx import HTTPXClientInstrumentor
+except ModuleNotFoundError:
+    HTTPXClientInstrumentor = None
 
 _httpx_instrumented = False
 
@@ -40,6 +44,10 @@ def _ensure_tracer_provider(*, service_name: str) -> None:
 def _instrument_httpx_once() -> None:
     global _httpx_instrumented
     if _httpx_instrumented:
+        return
+    # HTTPX instrumentation is optional here because the service does not depend on
+    # outbound HTTP in the MVP path. Missing extras should not block startup.
+    if HTTPXClientInstrumentor is None:
         return
     HTTPXClientInstrumentor().instrument()
     _httpx_instrumented = True

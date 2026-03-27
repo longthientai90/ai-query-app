@@ -40,6 +40,17 @@
       "envFile": "${workspaceFolder}/apps/api-gateway/.env",
       "console": "integratedTerminal",
       "justMyCode": true
+    },
+    {
+      "name": "Service Schema (no reload)",
+      "type": "debugpy",
+      "request": "launch",
+      "python": "${workspaceFolder}/apps/service-schema/.venv/Scripts/python.exe",
+      "program": "${workspaceFolder}/apps/service-schema/main.py",
+      "cwd": "${workspaceFolder}/apps/service-schema",
+      "envFile": "${workspaceFolder}/apps/service-schema/.env.example",
+      "console": "integratedTerminal",
+      "justMyCode": true
     }
   ],
   "compounds": [
@@ -48,7 +59,8 @@
       "configurations": [
         "MCP Query Server (no reload)",
         "Agent Core HTTP (no reload)",
-        "API Gateway (no reload)"
+        "API Gateway (no reload)",
+        "Service Schema (no reload)"
       ]
     }
   ]

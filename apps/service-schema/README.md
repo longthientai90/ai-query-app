@@ -22,6 +22,7 @@ python main.py
 ```
 
 `SCHEMA_ALIAS_OVERRIDES` and `SCHEMA_TAG_OVERRIDES` expect JSON objects in `.env`.
+When Qdrant is running locally from Docker Compose, set `QDRANT_ENABLED=true` and keep `QDRANT_URL=http://127.0.0.1:6333`.
 
 ## Endpoints
 
