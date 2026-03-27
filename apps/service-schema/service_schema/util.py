@@ -1,12 +1,13 @@
 from __future__ import annotations
 
 import re
+import unicodedata
 
 TOKEN_PATTERN = re.compile(r"[a-z0-9_]+")
 
 
 def tokenize(text: str) -> list[str]:
-    normalized = text.lower().replace("-", "_").replace(".", "_").replace("/", "_")
+    normalized = _strip_accents(text).lower().replace("-", "_").replace(".", "_").replace("/", "_")
     parts = TOKEN_PATTERN.findall(normalized)
     tokens: list[str] = []
     for part in parts:
@@ -67,3 +68,8 @@ def _singularize(token: str) -> str:
     if token.endswith("s") and not token.endswith("ss") and len(token) > 1:
         return token[:-1]
     return token
+
+
+def _strip_accents(text: str) -> str:
+    normalized = unicodedata.normalize("NFKD", text)
+    return "".join(char for char in normalized if not unicodedata.combining(char))

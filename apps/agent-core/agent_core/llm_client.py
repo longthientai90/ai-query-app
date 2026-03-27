@@ -127,7 +127,10 @@ class LLMClient:
                 "content": (
                     f"{skill.instructions}\n\n"
                     "Output JSON only with shape: {\"sql\":\"...\",\"params\":[],\"reason\":\"...\"}. "
-                    "Constraints: read-only SQL only (SELECT or WITH...SELECT), no semicolons, no comments."
+                    "Constraints: read-only SQL only (SELECT or WITH...SELECT), no semicolons, no comments. "
+                    "Use only table names, column names, and relationships present in Schema. "
+                    "Never invent columns such as user_id, customer_id, or status on a table unless that exact column appears in Schema. "
+                    "If a filter entity is not directly on one table, follow the relationship path shown in Schema through intermediate tables."
                 ),
             },
             {

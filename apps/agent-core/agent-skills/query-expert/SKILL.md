@@ -39,6 +39,8 @@ SQL Execution Progress:
 3. Build PostgreSQL SQL that is read-only and minimal:
    - Prefer explicit columns over `SELECT *`
    - Use predicates and joins that match schema keys
+   - Never invent columns that are not present in schema context
+   - If the filter entity is not directly on one table, traverse the relationship path shown in schema context
    - Prefer `[PK]`/`[IDX]` columns in `WHERE`, `JOIN ON`, and `ORDER BY`
    - Keep predicates sargable (avoid wrapping indexed columns in functions in `WHERE`)
    - Add `ORDER BY` and `LIMIT` where appropriate

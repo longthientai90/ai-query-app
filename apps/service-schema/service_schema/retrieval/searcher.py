@@ -108,8 +108,25 @@ class SchemaSearcher:
             if table_scores[table_name] > 0
         ]
 
-        if include_relationships:
-            ranked_table_names = self._expand_related_tables(store, ranked_table_names, max_tables=max_tables)
+        strong_direct_hits = self._select_strong_direct_hits(
+            ranked_table_names=ranked_table_names,
+            table_scores=table_scores,
+            table_reasons=table_reasons,
+            max_tables=max_tables,
+        )
+
+        if include_relationships and self._should_expand_relationships(
+            query_tokens=normalized_tokens,
+            direct_hits=strong_direct_hits,
+            table_reasons=table_reasons,
+        ):
+            ranked_table_names = self._expand_related_tables(
+                store,
+                strong_direct_hits,
+                max_tables=max_tables,
+            )
+        else:
+            ranked_table_names = strong_direct_hits
 
         ranked_tables: list[RankedTable] = []
         for table_name in ranked_table_names[:max_tables]:
@@ -168,6 +185,71 @@ class SchemaSearcher:
             suggested_relationships=relationships,
             warnings=warnings,
         )
+
+    def _select_strong_direct_hits(
+        self,
+        *,
+        ranked_table_names: list[str],
+        table_scores: dict[str, float],
+        table_reasons: dict[str, list[str]],
+        max_tables: int,
+    ) -> list[str]:
+        if not ranked_table_names:
+            return []
+
+        top_score = table_scores[ranked_table_names[0]]
+        minimum_score = max(3.0, top_score * 0.35)
+        selected: list[str] = []
+        for table_name in ranked_table_names:
+            reasons = table_reasons.get(table_name, [])
+            has_direct_signal = any(
+                reason.startswith(("exact_table:", "table:", "alias:", "alias_partial:", "tag:", "exact_column:", "column:"))
+                for reason in reasons
+            )
+            if not has_direct_signal:
+                continue
+            if table_scores[table_name] < minimum_score:
+                continue
+            selected.append(table_name)
+            if len(selected) >= max_tables:
+                break
+        return selected
+
+    def _should_expand_relationships(
+        self,
+        *,
+        query_tokens: list[str],
+        direct_hits: list[str],
+        table_reasons: dict[str, list[str]],
+    ) -> bool:
+        if len(direct_hits) >= 2:
+            return True
+
+        if not direct_hits:
+            return False
+
+        # Expand a single strong table only when the question language suggests
+        # crossing entities such as "products bought by user", not for simple
+        # single-table filters like status or counts.
+        relation_tokens = {
+            "theo",
+            "cua",
+            "thuoc",
+            "mua",
+            "bought",
+            "buyer",
+            "customer",
+            "user",
+            "product",
+            "category",
+            "brand",
+        }
+        if not any(token in relation_tokens for token in query_tokens):
+            return False
+
+        reasons = table_reasons.get(direct_hits[0], [])
+        has_exact_column = any(reason.startswith("exact_column:") for reason in reasons)
+        return has_exact_column
 
     def _expand_related_tables(self, store: SchemaStore, ranked_table_names: list[str], *, max_tables: int) -> list[str]:
         # Preserve top lexical hits first, then spend any remaining budget on FK-adjacent

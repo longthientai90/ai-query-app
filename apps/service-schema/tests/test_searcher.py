@@ -1,6 +1,7 @@
 from service_schema.indexing.store import SchemaStore
 from service_schema.models.schema import ColumnMetadata, ForeignKeyMetadata, TableMetadata
 from service_schema.retrieval.searcher import SchemaSearcher
+from service_schema.util import tokenize
 
 
 def make_store() -> SchemaStore:
@@ -80,7 +81,7 @@ def test_search_includes_relationship_expansion() -> None:
 
     result = searcher.search(
         store=make_store(),
-        query="purchase status",
+        query="which customer made a purchase",
         max_tables=2,
         include_indexes=False,
         include_relationships=True,
@@ -109,3 +110,52 @@ def test_relationship_expansion_does_not_evict_direct_hits() -> None:
 
     ranked = [item.table_name for item in result.ranked_tables]
     assert ranked == ["customers", "orders"]
+
+
+def test_tokenize_normalizes_vietnamese_accents() -> None:
+    tokens = tokenize("người dùng đã mua sản phẩm")
+
+    assert "nguoi" in tokens
+    assert "dung" in tokens
+    assert "mua" in tokens
+    assert "san" in tokens
+    assert "pham" in tokens
+
+
+def test_single_table_filter_query_does_not_expand_neighbors() -> None:
+    searcher = SchemaSearcher(
+        low_signal_patterns=[],
+        max_columns_per_table=8,
+        max_context_chars=4000,
+    )
+
+    result = searcher.search(
+        store=make_store(),
+        query="count orders with status paid",
+        max_tables=5,
+        include_indexes=False,
+        include_relationships=True,
+    )
+
+    ranked = [item.table_name for item in result.ranked_tables]
+    assert ranked == ["orders"]
+
+
+def test_relationship_query_can_expand_from_single_anchor_table() -> None:
+    searcher = SchemaSearcher(
+        low_signal_patterns=[],
+        max_columns_per_table=8,
+        max_context_chars=4000,
+    )
+
+    result = searcher.search(
+        store=make_store(),
+        query="which customer bought purchase status",
+        max_tables=3,
+        include_indexes=False,
+        include_relationships=True,
+    )
+
+    ranked = [item.table_name for item in result.ranked_tables]
+    assert ranked[0] == "orders"
+    assert "customers" in ranked
