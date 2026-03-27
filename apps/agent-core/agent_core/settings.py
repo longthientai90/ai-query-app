@@ -26,6 +26,11 @@ class AgentCoreSettings(BaseSettings):
 
     MCP_SERVER_URL: str = "http://127.0.0.1:8000/mcp"
     MCP_SERVER_TRANSPORT: Literal["http"] = "http"
+    SERVICE_SCHEMA_BASE_URL: str = "http://127.0.0.1:8200"
+    SERVICE_SCHEMA_SEARCH_PATH: str = "/schema/search"
+    SERVICE_SCHEMA_REINDEX_PATH: str = "/schema/reindex"
+    SERVICE_SCHEMA_TIMEOUT_SEC: float = 60.0
+    SERVICE_SCHEMA_MAX_TABLES: int = 6
 
     # Default to Azure OpenAI for this project.
     LLM_PROVIDER: Literal["none", "openai", "azure"] = "azure"

@@ -13,13 +13,11 @@ Activate when the request mentions:
 - SQL optimization or tuning
 - EXPLAIN plan analysis or index/join performance
 
-## Required MCP Tools
+## Runtime Inputs
 
-- Preferred fully qualified names:
-  - `mcp-query-server:postgres_explain`
-  - `mcp-query-server:postgres_get_schema`
-  - `mcp-query-server:postgres_query`
-- If runtime exposes local aliases, `postgres_explain`, `postgres_get_schema`, `postgres_query` are acceptable
+- Schema context is retrieved by `service-schema`
+- SQL inspection is performed by `mcp-query-server:postgres_explain`
+- Optional verification queries use `mcp-query-server:postgres_query`
 
 ## Workflow Checklist
 

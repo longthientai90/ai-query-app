@@ -1,51 +1,103 @@
 services:
-  # mcp-query-server:
-  #   build:
-  #     context: ../../apps/mcp-query-server
-  #     dockerfile: Dockerfile
-  #   container_name: mcp-query-server
-  #   env_file:
-  #     - ../../apps/mcp-query-server/.env
-  #   environment:
-  #     DATABASE_URL: postgresql://cmicadmin:Scuti%4012345@postgres-primary:5432/db_ec
-  #     READONLY_DATABASE_URLS: postgresql://cmicadmin:Scuti%4012345@postgres-replica-1:5432/db_ec,postgresql://cmicadmin:Scuti%4012345@postgres-replica-2:5432/db_ec
-  #     MCP_HOST: 0.0.0.0
-  #     MCP_PORT: 8000
-  #     MCP_TRANSPORT: http
-  #     OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector:4318
-  #     OTEL_EXPORTER_OTLP_PROTOCOL: http/protobuf
-  #     OTEL_TRACES_SAMPLER: always_on
-  #     OTEL_SERVICE_NAME: mcp-query-server
-  #   ports:
-  #     - "8000:8000"
-  #   restart: unless-stopped
-  #   extra_hosts:
-  #     - "host.docker.internal:host-gateway"
-  #   depends_on:
-  #     - otel-collector
+  mcp-query-server:
+    build:
+      context: ../../apps/mcp-query-server
+      dockerfile: Dockerfile
+    container_name: mcp-query-server
+    environment:
+      DATABASE_URL: postgresql://cmicadmin:Scuti%4012345@postgres-primary:5432/db_ec
+      READONLY_DATABASE_URLS: postgresql://cmicadmin:Scuti%4012345@postgres-replica-1:5432/db_ec,postgresql://cmicadmin:Scuti%4012345@postgres-replica-2:5432/db_ec
+      MCP_HOST: 0.0.0.0
+      MCP_PORT: 8000
+      MCP_TRANSPORT: http
+      OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector:4318
+      OTEL_EXPORTER_OTLP_PROTOCOL: http/protobuf
+      OTEL_TRACES_SAMPLER: always_on
+      OTEL_SERVICE_NAME: mcp-query-server
+    ports:
+      - "8000:8000"
+    restart: unless-stopped
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    depends_on:
+      postgres-primary:
+        condition: service_healthy
+      postgres-replica-1:
+        condition: service_healthy
+      postgres-replica-2:
+        condition: service_healthy
+      otel-collector:
+        condition: service_started
 
-  # agent-core:
-  #   build:
-  #     context: ../../apps/agent-core
-  #     dockerfile: Dockerfile
-  #   container_name: agent-core
-  #   env_file:
-  #     - ../../apps/agent-core/.env
-  #   environment:
-  #     AGENT_CORE_HOST: 0.0.0.0
-  #     AGENT_CORE_PORT: 8100
-  #     MCP_SERVER_TRANSPORT: http
-  #     MCP_SERVER_URL: http://mcp-query-server:8000/mcp
-  #     OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector:4318
-  #     OTEL_EXPORTER_OTLP_PROTOCOL: http/protobuf
-  #     OTEL_TRACES_SAMPLER: always_on
-  #     OTEL_SERVICE_NAME: agent-core
-  #   depends_on:
-  #     - mcp-query-server
-  #     - otel-collector
-  #   ports:
-  #     - "8100:8100"
-  #   restart: unless-stopped
+  service-schema:
+    build:
+      context: ../../apps/service-schema
+      dockerfile: Dockerfile
+    container_name: service-schema
+    environment:
+      SERVICE_SCHEMA_HOST: 0.0.0.0
+      SERVICE_SCHEMA_PORT: 8200
+      DATABASE_URL: postgresql://cmicadmin:Scuti%4012345@postgres-primary:5432/db_ec
+      DB_POOL_MIN: 1
+      DB_POOL_MAX: 5
+      DB_STATEMENT_TIMEOUT_MS: 15000
+      DB_SCHEMA_NAME: public
+      AUTO_REINDEX_ON_STARTUP: "true"
+      REINDEX_INCLUDE_INDEXES: "true"
+      DEFAULT_MAX_TABLES: 5
+      MAX_SEARCH_TABLES: 12
+      MAX_COLUMNS_PER_TABLE: 8
+      MAX_CONTEXT_CHARS: 6000
+      LOW_SIGNAL_TABLE_PATTERNS: log,logs,audit,audits,event,events,config,configs,temp,tmp
+      SCHEMA_ALIAS_OVERRIDES: '{}'
+      SCHEMA_TAG_OVERRIDES: '{}'
+      QDRANT_ENABLED: "false"
+      QDRANT_URL: http://qdrant:6333
+      QDRANT_COLLECTION: schema-documents
+      OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector:4318
+      OTEL_EXPORTER_OTLP_PROTOCOL: http/protobuf
+      OTEL_TRACES_SAMPLER: always_on
+      OTEL_SERVICE_NAME: service-schema
+    ports:
+      - "8200:8200"
+    restart: unless-stopped
+    depends_on:
+      postgres-primary:
+        condition: service_healthy
+      qdrant:
+        condition: service_started
+      otel-collector:
+        condition: service_started
+
+  agent-core:
+    build:
+      context: ../../apps/agent-core
+      dockerfile: Dockerfile
+    container_name: agent-core
+    environment:
+      AGENT_CORE_HOST: 0.0.0.0
+      AGENT_CORE_PORT: 8100
+      MCP_SERVER_TRANSPORT: http
+      MCP_SERVER_URL: http://mcp-query-server:8000/mcp
+      SERVICE_SCHEMA_BASE_URL: http://service-schema:8200
+      SERVICE_SCHEMA_SEARCH_PATH: /schema/search
+      SERVICE_SCHEMA_REINDEX_PATH: /schema/reindex
+      SERVICE_SCHEMA_TIMEOUT_SEC: 60
+      SERVICE_SCHEMA_MAX_TABLES: 6
+      OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector:4318
+      OTEL_EXPORTER_OTLP_PROTOCOL: http/protobuf
+      OTEL_TRACES_SAMPLER: always_on
+      OTEL_SERVICE_NAME: agent-core
+    depends_on:
+      mcp-query-server:
+        condition: service_started
+      service-schema:
+        condition: service_started
+      otel-collector:
+        condition: service_started
+    ports:
+      - "8100:8100"
+    restart: unless-stopped
 
   # api-gateway:
   #   build:

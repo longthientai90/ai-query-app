@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 import sys
 from contextlib import asynccontextmanager
 
@@ -15,6 +16,13 @@ if sys.platform == "win32":
     asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
 
 
+def _configure_logging() -> None:
+    logging.basicConfig(
+        level=getattr(logging, settings.SERVICE_SCHEMA_LOG_LEVEL.upper(), logging.INFO),
+        format="%(asctime)s %(levelname)s %(name)s %(message)s",
+    )
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     runtime = ServiceSchemaRuntime(settings)
@@ -27,6 +35,7 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(title="service-schema", lifespan=lifespan)
+_configure_logging()
 setup_telemetry(app=app, service_name="service-schema")
 app.include_router(router)
 

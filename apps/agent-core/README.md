@@ -4,7 +4,7 @@ Runtime orchestration layer for:
 
 - Loading declarative skills from `apps/agent-core/agent-skills`
 - Routing user question to the right skill
-- Calling MCP tools (`postgres_get_schema`, `postgres_query`, `postgres_explain`)
+- Calling `service-schema` for schema retrieval and MCP tools for query/explain
 - Returning a structured response for API gateway
 
 ## Run as CLI
@@ -61,6 +61,8 @@ curl -X POST "http://127.0.0.1:8100/agent/handle" ^
 - Config file location is fixed at `apps/agent-core/.env`.
 - Create `.env` from `.env.example` and fill your Azure credentials.
 - `MCP_SERVER_URL` (default: `http://127.0.0.1:8000/mcp`)
+- `SERVICE_SCHEMA_BASE_URL` (default: `http://127.0.0.1:8200`)
+- `SERVICE_SCHEMA_TIMEOUT_SEC` (default: `60`)
 - `AGENT_CORE_HOST` (default: `0.0.0.0`)
 - `AGENT_CORE_PORT` (default: `8100`)
 - `LLM_PROVIDER` (default: `azure`)

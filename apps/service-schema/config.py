@@ -9,6 +9,7 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 class ServiceSchemaSettings(BaseSettings):
     SERVICE_SCHEMA_HOST: str = "0.0.0.0"
     SERVICE_SCHEMA_PORT: int = 8200
+    SERVICE_SCHEMA_LOG_LEVEL: str = "INFO"
 
     DATABASE_URL: str = "postgresql://postgres:postgres@127.0.0.1:5432/postgres"
     DB_POOL_MIN: int = 1

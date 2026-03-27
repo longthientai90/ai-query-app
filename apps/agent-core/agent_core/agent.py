@@ -14,6 +14,7 @@ from opentelemetry import trace
 from .llm_client import LLMClient, LLMClientError
 from .mcp_client import MCPClient, MCPClientError
 from .models import SkillDefinition
+from .service_schema_client import ServiceSchemaClient, ServiceSchemaClientError
 from .session import AgentSession
 from .settings import AgentCoreSettings
 from .skill_loader import SkillLoader, SkillLoaderError
@@ -36,18 +37,20 @@ class Agent:
         skill_loader: SkillLoader | None = None,
         mcp_client: MCPClient | None = None,
         llm_client: LLMClient | None = None,
+        service_schema_client: ServiceSchemaClient | None = None,
     ) -> None:
         self.settings = settings or AgentCoreSettings()
         self.skill_loader = skill_loader or SkillLoader(self.settings.SKILLS_DIR)
         self.mcp_client = mcp_client or MCPClient(self.settings)
         self.llm_client = llm_client or LLMClient(self.settings)
+        self.service_schema_client = service_schema_client or ServiceSchemaClient(self.settings)
 
         self.skills: dict[str, SkillDefinition] = {}
         self.sessions: dict[str, AgentSession] = {}
 
         self._started = False
-        self._schema_cache_data: dict[bool, dict[str, Any]] = {}
-        self._schema_cache_at: dict[bool, float] = {}
+        self._schema_cache_data: dict[tuple[str, bool], dict[str, Any]] = {}
+        self._schema_cache_at: dict[tuple[str, bool], float] = {}
 
     async def start(self) -> None:
         """Load skills once and establish MCP connection."""
@@ -68,6 +71,7 @@ class Agent:
     async def stop(self) -> None:
         """Gracefully close runtime resources."""
         await self.mcp_client.stop()
+        await self.service_schema_client.close()
         self._started = False
 
     async def handle(
@@ -142,15 +146,22 @@ class Agent:
         session: AgentSession,
         skill: SkillDefinition,
     ) -> dict[str, Any]:
-        """Schema skill flow: refresh schema and summarize structural metadata."""
+        """Schema skill flow: refresh service-schema index and summarize relevant metadata."""
         with tracer.start_as_current_span("agent.skill.schema_analyzer") as span:
-            schema_data = await self._get_schema(
-                force_refresh=True,
+            await self._reindex_schema(include_indexes=False, session=session)
+            schema_data = await self._search_schema(
+                question=question,
                 include_indexes=False,
+                include_relationships=True,
                 session=session,
             )
-            tables = schema_data.get("tables", []) if isinstance(schema_data, dict) else []
-            result = {"tables": tables, "rowCount": len(tables)}
+            tables = schema_data.get("ranked_tables", []) if isinstance(schema_data, dict) else []
+            result = {
+                "tables": tables,
+                "rowCount": len(tables),
+                "compact_context": schema_data.get("compact_context"),
+                "suggested_relationships": schema_data.get("suggested_relationships", []),
+            }
             span.set_attribute("tables.count", len(tables))
             answer = await self.llm_client.summarize_answer(
                 question=question,
@@ -176,9 +187,10 @@ class Agent:
     ) -> dict[str, Any]:
         """Query skill flow: build SQL, execute query tool, and summarize rows."""
         with tracer.start_as_current_span("agent.skill.query_expert") as span:
-            schema_data = await self._get_schema(
-                force_refresh=False,
+            schema_data = await self._search_schema(
+                question=question,
                 include_indexes=True,
+                include_relationships=True,
                 session=session,
             )
             schema_text = self._compact_schema_text(schema_data)
@@ -270,9 +282,10 @@ class Agent:
     ) -> dict[str, Any]:
         """Performance skill flow: build SQL candidate and inspect its EXPLAIN plan."""
         with tracer.start_as_current_span("agent.skill.performance_tuner"):
-            schema_data = await self._get_schema(
-                force_refresh=False,
+            schema_data = await self._search_schema(
+                question=question,
                 include_indexes=True,
+                include_relationships=True,
                 session=session,
             )
             schema_text = self._compact_schema_text(schema_data)
@@ -368,21 +381,22 @@ class Agent:
                 "result": explain_data,
             }
 
-    async def _get_schema(
+    async def _search_schema(
         self,
         *,
-        force_refresh: bool,
+        question: str,
         include_indexes: bool,
+        include_relationships: bool,
         session: AgentSession,
     ) -> dict[str, Any]:
-        """Fetch schema with TTL cache to avoid repeated metadata calls."""
+        """Fetch compact schema context from service-schema with TTL cache."""
         with tracer.start_as_current_span("agent.schema_context") as span:
             now = time.time()
-            cached_data = self._schema_cache_data.get(include_indexes)
-            cached_at = self._schema_cache_at.get(include_indexes, 0.0)
+            cache_key = (question.strip().lower(), include_indexes)
+            cached_data = self._schema_cache_data.get(cache_key)
+            cached_at = self._schema_cache_at.get(cache_key, 0.0)
             cache_valid = (
-                not force_refresh
-                and cached_data is not None
+                cached_data is not None
                 and (now - cached_at) < self.settings.AGENT_SCHEMA_CACHE_TTL_SEC
             )
             span.set_attribute("schema.cache_hit", bool(cache_valid))
@@ -390,92 +404,57 @@ class Agent:
             if cache_valid:
                 return cached_data
 
-            # Cache schema by include_indexes mode because query generation and schema-only
-            # inspection need different metadata density.
-            payload = await self.mcp_client.call_tool(
-                "postgres_get_schema",
-                {"tables": None, "include_indexes": include_indexes},
-            )
-            schema_data = self.extract_tool_data(payload)
+            try:
+                schema_data = await self.service_schema_client.search(
+                    query=question,
+                    max_tables=self.settings.SERVICE_SCHEMA_MAX_TABLES,
+                    include_indexes=include_indexes,
+                    include_relationships=include_relationships,
+                )
+            except ServiceSchemaClientError as exc:
+                span.set_attribute("error", True)
+                span.set_attribute("error.type", "ServiceSchemaClientError")
+                raise AgentRuntimeError(f"Failed to retrieve schema from service-schema: {exc}") from exc
+
             session.push_tool(
-                "postgres_get_schema",
-                {"tables": None, "include_indexes": include_indexes},
+                "service_schema.search",
+                {
+                    "query": question,
+                    "max_tables": self.settings.SERVICE_SCHEMA_MAX_TABLES,
+                    "include_indexes": include_indexes,
+                    "include_relationships": include_relationships,
+                },
                 self._summarize_result(schema_data),
             )
-            self._schema_cache_data[include_indexes] = schema_data
-            self._schema_cache_at[include_indexes] = now
+            self._schema_cache_data[cache_key] = schema_data
+            self._schema_cache_at[cache_key] = now
             return schema_data
 
     @staticmethod
     def _compact_schema_text(schema_data: dict[str, Any]) -> str:
-        tables = schema_data.get("tables", []) if isinstance(schema_data, dict) else []
-        lines: list[str] = []
-        for table in tables:
-            table_name = table.get("name")
-            columns = table.get("columns", [])
-            indexes = table.get("indexes", [])
-            if not isinstance(table_name, str) or not isinstance(columns, list):
-                continue
+        if not isinstance(schema_data, dict):
+            return ""
+        compact_context = schema_data.get("compact_context")
+        if isinstance(compact_context, str):
+            return compact_context
+        return ""
 
-            # Extract index column hints into the schema text so SQL generation can prefer
-            # sargable predicates and join keys without seeing the raw DDL.
-            indexed_columns: set[str] = set()
-            index_summaries: list[str] = []
-            if isinstance(indexes, list):
-                for index in indexes:
-                    if not isinstance(index, dict):
-                        continue
-                    index_name = index.get("name")
-                    index_definition = index.get("definition")
-                    parsed_columns = (
-                        Agent._extract_index_columns(index_definition)
-                        if isinstance(index_definition, str)
-                        else []
-                    )
-                    indexed_columns.update(parsed_columns)
-                    if isinstance(index_name, str):
-                        if parsed_columns:
-                            index_summaries.append(f"{index_name}({', '.join(parsed_columns)})")
-                        elif isinstance(index_definition, str):
-                            index_summaries.append(f"{index_name}: {index_definition}")
-
-            col_parts: list[str] = []
-            for col in columns:
-                col_name = col.get("name")
-                col_type = col.get("type")
-                if isinstance(col_name, str) and isinstance(col_type, str):
-                    markers: list[str] = []
-                    if bool(col.get("pk")):
-                        markers.append("PK")
-                    if col_name in indexed_columns:
-                        markers.append("IDX")
-                    marker_text = f"[{'/'.join(markers)}]" if markers else ""
-                    col_parts.append(f"{col_name}:{col_type}{marker_text}")
-            lines.append(f"{table_name}({', '.join(col_parts)})")
-            if index_summaries:
-                lines.append(f"  indexes: {', '.join(index_summaries)}")
-        return "\n".join(lines)
-
-    @staticmethod
-    def _extract_index_columns(index_definition: str) -> list[str]:
-        match = re.search(r"\((.+)\)", index_definition)
-        if not match:
-            return []
-
-        columns: list[str] = []
-        raw_items = [item.strip() for item in match.group(1).split(",") if item.strip()]
-        for item in raw_items:
-            cleaned = re.sub(
-                r"\s+(ASC|DESC|NULLS\s+FIRST|NULLS\s+LAST)\b",
-                "",
-                item,
-                flags=re.IGNORECASE,
+    async def _reindex_schema(self, *, include_indexes: bool, session: AgentSession) -> dict[str, Any]:
+        with tracer.start_as_current_span("agent.schema_reindex") as span:
+            try:
+                result = await self.service_schema_client.reindex(include_indexes=include_indexes)
+            except ServiceSchemaClientError as exc:
+                span.set_attribute("error", True)
+                span.set_attribute("error.type", "ServiceSchemaClientError")
+                raise AgentRuntimeError(f"Failed to reindex schema via service-schema: {exc}") from exc
+            session.push_tool(
+                "service_schema.reindex",
+                {"include_indexes": include_indexes},
+                self._summarize_result(result),
             )
-            cleaned = re.sub(r"\s+COLLATE\s+\S+", "", cleaned, flags=re.IGNORECASE).strip()
-            candidate = cleaned.split(".")[-1].strip().strip('"')
-            if re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", candidate):
-                columns.append(candidate)
-        return columns
+            self._schema_cache_data.clear()
+            self._schema_cache_at.clear()
+            return result
 
     @staticmethod
     def extract_tool_data(payload: dict[str, Any]) -> dict[str, Any]:
@@ -504,11 +483,15 @@ class Agent:
         if not isinstance(payload, dict):
             return {"type": type(payload).__name__}
         summary: dict[str, Any] = {}
-        for key in ("rowCount", "durationMs", "error", "reason", "message"):
+        for key in ("rowCount", "durationMs", "duration_ms", "error", "reason", "message", "status", "version"):
             if key in payload:
                 summary[key] = payload[key]
         if "tables" in payload and isinstance(payload["tables"], list):
             summary["tableCount"] = len(payload["tables"])
+        if "ranked_tables" in payload and isinstance(payload["ranked_tables"], list):
+            summary["tableCount"] = len(payload["ranked_tables"])
+        if "compact_context" in payload and isinstance(payload["compact_context"], str):
+            summary["contextChars"] = len(payload["compact_context"])
         if "plan" in payload:
             summary["hasPlan"] = True
         return summary

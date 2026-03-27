@@ -13,10 +13,9 @@ Activate when the request includes keywords or intents such as:
 - What data exists in the database
 - Clarifying table structure before query generation
 
-## Required MCP Tool
+## Runtime Inputs
 
-- Preferred fully qualified name: `mcp-query-server:postgres_get_schema`
-- If runtime exposes local aliases, `postgres_get_schema` is acceptable
+- Schema retrieval and refresh are performed by `service-schema`
 
 ## Workflow Checklist
 
@@ -31,14 +30,12 @@ Schema Analysis Progress:
 - [ ] Step 5: Return concise schema summary with caveats
 ```
 
-1. Determine whether full schema or table-specific schema is needed.
-2. Call `postgres_get_schema` with:
-   - `tables: null` unless user asked for specific tables
-   - `include_indexes: false` by default
-3. Inspect the output table-by-table:
-   - Table name and column list
-   - Primary key flags (`pk`)
-   - Nullability and data types
+1. Determine whether broad schema discovery or focused schema retrieval is needed.
+2. Refresh schema through `service-schema` when the request is about current structure.
+3. Inspect the returned ranked tables and compact context:
+   - Table names and selected columns
+   - Relationship hints
+   - Primary/index annotations when present
 4. Infer likely entity relationships from key columns:
    - `*_id` patterns and primary keys
    - Natural lookup tables and fact tables
@@ -46,10 +43,10 @@ Schema Analysis Progress:
 
 ## Feedback Loop
 
-- If schema output is empty or incomplete, retry with explicit `tables` filter if user provided table names.
+- If schema output is empty or incomplete, retry with a narrower, more explicit schema question.
 - If keys/relationships are ambiguous, state uncertainty explicitly and avoid inventing ERD links.
 
 ## Constraints
 
 - Do not fabricate tables or columns that are not in tool output.
-- If schema is empty or tool reports an error, say that clearly and ask for environment verification.
+- If schema is empty or the retrieval service reports an error, say that clearly and ask for environment verification.

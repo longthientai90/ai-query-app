@@ -13,11 +13,10 @@ Activate when user intent is data retrieval:
 - Aggregate metrics (sum, count, avg, revenue, trends)
 - Ranking, grouping, time-based summaries
 
-## Required MCP Tools
+## Runtime Inputs
 
-- Preferred fully qualified name: `mcp-query-server:postgres_query`
-- Supporting tool: `mcp-query-server:postgres_get_schema`
-- If runtime exposes local aliases, `postgres_query` and `postgres_get_schema` are acceptable
+- Schema context is retrieved by `service-schema`
+- SQL execution is performed by `mcp-query-server:postgres_query`
 
 ## Workflow Checklist
 
@@ -35,7 +34,7 @@ SQL Execution Progress:
    - Filters and time windows
    - Grouping or aggregation rules
 2. Ensure schema context is known:
-   - If needed, call `postgres_get_schema` first
+   - The runtime should fetch compact schema context from `service-schema`
    - Prefer schema annotations like `[PK]`, `[IDX]`, and `indexes:` when available
 3. Build PostgreSQL SQL that is read-only and minimal:
    - Prefer explicit columns over `SELECT *`
@@ -51,7 +50,7 @@ SQL Execution Progress:
 - If query returns validation/db error, revise SQL and retry once.
 - If query returns timeout, narrow filters and retry once with simpler/sargable predicates.
 - If results are empty, verify filters and time range before concluding no data.
-- If schema is unclear, fetch schema first instead of guessing columns.
+- If schema is unclear, ask for refreshed schema context instead of guessing columns.
 
 ## SQL Safety Rules
 

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 import time
 from dataclasses import asdict
 from datetime import datetime, timezone
@@ -9,6 +10,8 @@ from service_schema.db.loader import SchemaLoader
 from service_schema.db.pool import close_pool, init_pool
 from service_schema.indexing.store import SchemaStore
 from service_schema.retrieval.searcher import SchemaSearcher
+
+logger = logging.getLogger(__name__)
 
 
 class ServiceSchemaRuntime:
@@ -52,10 +55,20 @@ class ServiceSchemaRuntime:
         except Exception as exc:
             self.last_sync_error = str(exc)
             warnings.append(f"reindex_failed:{exc}")
+            logger.exception("service_schema_reindex_failed include_indexes=%s", include_indexes)
             if self.store is None:
                 raise
         duration_ms = round((time.perf_counter() - started_at) * 1000.0, 2)
         self.last_sync_duration_ms = duration_ms
+        if self.store is not None:
+            logger.info(
+                "service_schema_reindex_completed indexed_tables=%s schema_hash=%s version=%s duration_ms=%s include_indexes=%s",
+                len(self.store.tables),
+                self.store.schema_hash,
+                self.store.version,
+                duration_ms,
+                include_indexes,
+            )
         return {
             "status": "ok" if self.last_sync_error is None else "degraded",
             "indexed_tables": len(self.store.tables) if self.store is not None else 0,
@@ -81,6 +94,17 @@ class ServiceSchemaRuntime:
             max_tables=max_tables,
             include_indexes=include_indexes,
             include_relationships=include_relationships,
+        )
+        ranked_table_names = [item.table_name for item in result.ranked_tables]
+        logger.info(
+            "service_schema_search_completed query=%r returned_tables=%s table_count=%s include_indexes=%s include_relationships=%s schema_hash=%s version=%s",
+            query,
+            ranked_table_names,
+            len(ranked_table_names),
+            include_indexes,
+            include_relationships,
+            result.schema_hash,
+            result.version,
         )
         return {
             "query": result.query,
