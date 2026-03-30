@@ -1,4 +1,5 @@
 import { ref } from "vue";
+import { recordSearchMetric } from "./useInsights";
 
 const DEFAULT_API_URL = "http://localhost:8080/api/search";
 const API_URL = import.meta.env.VITE_SEARCH_API_URL || DEFAULT_API_URL;
@@ -57,10 +58,25 @@ export function useSearch() {
         durationMs,
       };
 
+      recordSearchMetric({
+        question: query,
+        rowCount,
+        durationMs,
+        status: "success",
+      });
+
       searchResult.value = normalizedResult;
       return normalizedResult;
     } catch (err) {
-      error.value = err instanceof Error ? err.message : "Unexpected error happened.";
+      const errorMessage = err instanceof Error ? err.message : "Unexpected error happened.";
+      error.value = errorMessage;
+      recordSearchMetric({
+        question: query,
+        rowCount: 0,
+        durationMs: null,
+        status: "error",
+        errorMessage,
+      });
       searchResult.value = null;
       return null;
     } finally {
