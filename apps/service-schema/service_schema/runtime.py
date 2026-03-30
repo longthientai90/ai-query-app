@@ -9,6 +9,7 @@ from config import ServiceSchemaSettings
 from service_schema.db.loader import SchemaLoader
 from service_schema.db.pool import close_pool, init_pool
 from service_schema.indexing.store import SchemaStore
+from service_schema.retrieval.query_rewriter import SchemaQueryRewriter
 from service_schema.retrieval.searcher import SchemaSearcher
 
 logger = logging.getLogger(__name__)
@@ -26,6 +27,14 @@ class ServiceSchemaRuntime:
             low_signal_patterns=settings.low_signal_patterns,
             max_columns_per_table=settings.MAX_COLUMNS_PER_TABLE,
             max_context_chars=settings.MAX_CONTEXT_CHARS,
+        )
+        self.query_rewriter = SchemaQueryRewriter(
+            enabled=settings.SCHEMA_QUERY_REWRITE_ENABLED,
+            azure_endpoint=settings.AZURE_OPENAI_ENDPOINT,
+            api_key=settings.AZURE_OPENAI_API_KEY,
+            api_version=settings.AZURE_OPENAI_API_VERSION,
+            deployment=settings.AZURE_OPENAI_DEPLOYMENT,
+            max_keywords=settings.SCHEMA_QUERY_REWRITE_MAX_KEYWORDS,
         )
         self.store: SchemaStore | None = None
         self.last_sync_error: str | None = None
@@ -78,7 +87,7 @@ class ServiceSchemaRuntime:
             "warnings": warnings,
         }
 
-    def search(
+    async def search(
         self,
         *,
         query: str,
@@ -88,16 +97,54 @@ class ServiceSchemaRuntime:
     ) -> dict[str, object]:
         store = self._require_store()
         max_tables = min(max_tables, self.settings.MAX_SEARCH_TABLES)
+        # First pass stays fully local so common Vietnamese prompts avoid an LLM round-trip.
+        local_rewrite = self.query_rewriter.rewrite_locally(query)
         result = self.searcher.search(
             store=store,
             query=query,
             max_tables=max_tables,
             include_indexes=include_indexes,
             include_relationships=include_relationships,
+            query_tokens=local_rewrite.tokens,
+            force_expand_relationships=local_rewrite.force_expand_relationships,
         )
+        warnings = list(result.warnings)
+        warnings.extend(local_rewrite.warnings)
+
+        used_llm_query_rewrite = False
+        rewritten_query_tokens = list(local_rewrite.tokens)
+        top_score = result.ranked_tables[0].score if result.ranked_tables else 0.0
+        should_retry_with_llm = (
+            self.query_rewriter.enabled
+            and (not result.ranked_tables or top_score < self.settings.SCHEMA_QUERY_REWRITE_SCORE_THRESHOLD)
+        )
+        if should_retry_with_llm:
+            llm_rewrite = await self.query_rewriter.rewrite_with_llm(query=query, store=store)
+            warnings.extend(llm_rewrite.warnings)
+            # Merge local and LLM tokens so the deterministic lexical scorer keeps
+            # all cheap matches while adding the model's semantic hints.
+            combined_tokens = self._dedupe_tokens([*local_rewrite.tokens, *llm_rewrite.tokens])
+            used_llm_query_rewrite = llm_rewrite.used_llm
+            rewritten_query_tokens = combined_tokens or rewritten_query_tokens
+            if combined_tokens and combined_tokens != local_rewrite.tokens:
+                retried_result = self.searcher.search(
+                    store=store,
+                    query=query,
+                    max_tables=max_tables,
+                    include_indexes=include_indexes,
+                    include_relationships=include_relationships,
+                    query_tokens=combined_tokens,
+                    force_expand_relationships=(
+                        local_rewrite.force_expand_relationships or llm_rewrite.force_expand_relationships
+                    ),
+                )
+                if retried_result.ranked_tables:
+                    result = retried_result
+                    top_score = result.ranked_tables[0].score
+
         ranked_table_names = [item.table_name for item in result.ranked_tables]
         logger.info(
-            "service_schema_search_completed query=%r returned_tables=%s table_count=%s include_indexes=%s include_relationships=%s schema_hash=%s version=%s",
+            "service_schema_search_completed query=%r returned_tables=%s table_count=%s include_indexes=%s include_relationships=%s schema_hash=%s version=%s used_llm_query_rewrite=%s rewritten_query_tokens=%s top_score=%s",
             query,
             ranked_table_names,
             len(ranked_table_names),
@@ -105,17 +152,22 @@ class ServiceSchemaRuntime:
             include_relationships,
             result.schema_hash,
             result.version,
+            used_llm_query_rewrite,
+            rewritten_query_tokens,
+            top_score,
         )
         return {
             "query": result.query,
             "schema_hash": result.schema_hash,
             "version": result.version,
             "used_vector_search": result.used_vector_search,
+            "used_llm_query_rewrite": used_llm_query_rewrite,
+            "rewritten_query_tokens": rewritten_query_tokens,
             "compact_context": result.compact_context,
             "ranked_tables": [asdict(item) for item in result.ranked_tables],
             "ranked_columns": [asdict(item) for item in result.ranked_columns],
             "suggested_relationships": [asdict(item) for item in result.suggested_relationships],
-            "warnings": result.warnings,
+            "warnings": self._dedupe_tokens(warnings),
         }
 
     def get_table(self, table_name: str) -> dict[str, object] | None:
@@ -199,3 +251,13 @@ class ServiceSchemaRuntime:
         if self.store is None:
             raise RuntimeError("Schema store is empty. Run /schema/reindex first.")
         return self.store
+
+    @staticmethod
+    def _dedupe_tokens(tokens: list[str]) -> list[str]:
+        seen: set[str] = set()
+        ordered: list[str] = []
+        for token in tokens:
+            if token not in seen:
+                ordered.append(token)
+                seen.add(token)
+        return ordered

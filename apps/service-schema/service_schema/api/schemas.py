@@ -49,6 +49,8 @@ class SchemaSearchResponse(BaseModel):
     schema_hash: str | None = None
     version: int
     used_vector_search: bool = False
+    used_llm_query_rewrite: bool = False
+    rewritten_query_tokens: list[str] = Field(default_factory=list)
     compact_context: str
     ranked_tables: list[RankedTableResponse]
     ranked_columns: list[RankedColumnResponse]

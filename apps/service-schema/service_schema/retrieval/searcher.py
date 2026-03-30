@@ -28,8 +28,10 @@ class SchemaSearcher:
         max_tables: int,
         include_indexes: bool,
         include_relationships: bool,
+        query_tokens: list[str] | None = None,
+        force_expand_relationships: bool = False,
     ) -> SchemaSearchResult:
-        normalized_tokens = tokenize(query)
+        normalized_tokens = query_tokens or tokenize(query)
         if not normalized_tokens:
             raise RuntimeError("Search query does not contain usable tokens")
 
@@ -119,6 +121,7 @@ class SchemaSearcher:
             query_tokens=normalized_tokens,
             direct_hits=strong_direct_hits,
             table_reasons=table_reasons,
+            force_expand_relationships=force_expand_relationships,
         ):
             ranked_table_names = self._expand_related_tables(
                 store,
@@ -179,6 +182,8 @@ class SchemaSearcher:
             schema_hash=store.schema_hash,
             version=store.version,
             used_vector_search=False,
+            used_llm_query_rewrite=False,
+            rewritten_query_tokens=normalized_tokens,
             compact_context=compact_context,
             ranked_tables=ranked_tables,
             ranked_columns=unique_columns[: max_tables * self.max_columns_per_table],
@@ -221,12 +226,16 @@ class SchemaSearcher:
         query_tokens: list[str],
         direct_hits: list[str],
         table_reasons: dict[str, list[str]],
+        force_expand_relationships: bool,
     ) -> bool:
         if len(direct_hits) >= 2:
             return True
 
         if not direct_hits:
             return False
+
+        if force_expand_relationships:
+            return True
 
         # Expand a single strong table only when the question language suggests
         # crossing entities such as "products bought by user", not for simple

@@ -39,7 +39,7 @@ async def reindex(payload: ReindexRequest, request: Request) -> ReindexResponse:
 async def search(payload: SchemaSearchRequest, request: Request) -> SchemaSearchResponse:
     runtime = get_runtime(request)
     try:
-        result = runtime.search(
+        result = await runtime.search(
             query=payload.query,
             max_tables=payload.max_tables,
             include_indexes=payload.include_indexes,

@@ -31,6 +31,14 @@ class ServiceSchemaSettings(BaseSettings):
     QDRANT_URL: str | None = None
     QDRANT_COLLECTION: str = "schema-documents"
 
+    SCHEMA_QUERY_REWRITE_ENABLED: bool = False
+    SCHEMA_QUERY_REWRITE_SCORE_THRESHOLD: float = 3.0
+    SCHEMA_QUERY_REWRITE_MAX_KEYWORDS: int = 8
+    AZURE_OPENAI_ENDPOINT: str | None = None
+    AZURE_OPENAI_API_KEY: str | None = None
+    AZURE_OPENAI_API_VERSION: str = "2024-10-21"
+    AZURE_OPENAI_DEPLOYMENT: str | None = None
+
     model_config = SettingsConfigDict(
         env_file=Path(__file__).resolve().with_name(".env"),
         env_file_encoding="utf-8",

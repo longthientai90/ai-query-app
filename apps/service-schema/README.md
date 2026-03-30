@@ -31,3 +31,20 @@ Search logs print the query and returned table names in the service console.
 - `POST /schema/search`
 - `GET /schema/tables/{table_name}`
 - `GET /schema/health`
+
+## Query rewrite
+
+`service-schema` now supports hybrid query rewrite before lexical retrieval:
+
+- local normalization plus a small Vietnamese synonym dictionary
+- optional Azure OpenAI fallback rewrite when lexical search returns no tables or a weak score
+- lexical retrieval remains the source of truth
+- FK neighbor expansion can be forced after a successful rewrite so queries like `sản phẩm` can surface related tables such as `categories`
+
+Set these env vars to enable Azure rewrite with a small deployment such as `gpt-4o-mini`:
+
+- `SCHEMA_QUERY_REWRITE_ENABLED=true`
+- `AZURE_OPENAI_ENDPOINT=...`
+- `AZURE_OPENAI_API_KEY=...`
+- `AZURE_OPENAI_DEPLOYMENT=...`
+- optional: `AZURE_OPENAI_API_VERSION=2024-10-21`

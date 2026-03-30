@@ -82,4 +82,6 @@ class SchemaSearchResult:
     ranked_tables: list[RankedTable]
     ranked_columns: list[RankedColumn]
     suggested_relationships: list[SuggestedRelationship]
+    used_llm_query_rewrite: bool = False
+    rewritten_query_tokens: list[str] = field(default_factory=list)
     warnings: list[str] = field(default_factory=list)
