@@ -99,6 +99,12 @@ class ServiceSchemaRuntime:
         max_tables = min(max_tables, self.settings.MAX_SEARCH_TABLES)
         # First pass stays fully local so common Vietnamese prompts avoid an LLM round-trip.
         local_rewrite = self.query_rewriter.rewrite_locally(query)
+        logger.info(
+            "service_schema_search_local_rewrite query=%r local_tokens=%s force_expand_relationships=%s",
+            query,
+            local_rewrite.tokens,
+            local_rewrite.force_expand_relationships,
+        )
         result = self.searcher.search(
             store=store,
             query=query,
@@ -118,6 +124,15 @@ class ServiceSchemaRuntime:
             self.query_rewriter.enabled
             and (not result.ranked_tables or top_score < self.settings.SCHEMA_QUERY_REWRITE_SCORE_THRESHOLD)
         )
+        logger.info(
+            "service_schema_search_llm_decision query=%r llm_enabled=%s should_retry_with_llm=%s initial_top_score=%s initial_tables=%s threshold=%s",
+            query,
+            self.query_rewriter.enabled,
+            should_retry_with_llm,
+            top_score,
+            [item.table_name for item in result.ranked_tables],
+            self.settings.SCHEMA_QUERY_REWRITE_SCORE_THRESHOLD,
+        )
         if should_retry_with_llm:
             llm_rewrite = await self.query_rewriter.rewrite_with_llm(query=query, store=store)
             warnings.extend(llm_rewrite.warnings)
@@ -126,6 +141,14 @@ class ServiceSchemaRuntime:
             combined_tokens = self._dedupe_tokens([*local_rewrite.tokens, *llm_rewrite.tokens])
             used_llm_query_rewrite = llm_rewrite.used_llm
             rewritten_query_tokens = combined_tokens or rewritten_query_tokens
+            logger.info(
+                "service_schema_search_llm_result query=%r used_llm_query_rewrite=%s llm_tokens=%s combined_tokens=%s warnings=%s",
+                query,
+                used_llm_query_rewrite,
+                llm_rewrite.tokens,
+                combined_tokens,
+                llm_rewrite.warnings,
+            )
             if combined_tokens and combined_tokens != local_rewrite.tokens:
                 retried_result = self.searcher.search(
                     store=store,
@@ -141,6 +164,12 @@ class ServiceSchemaRuntime:
                 if retried_result.ranked_tables:
                     result = retried_result
                     top_score = result.ranked_tables[0].score
+                logger.info(
+                    "service_schema_search_llm_retry_completed query=%r retried_tables=%s retried_top_score=%s",
+                    query,
+                    [item.table_name for item in retried_result.ranked_tables],
+                    retried_result.ranked_tables[0].score if retried_result.ranked_tables else 0.0,
+                )
 
         ranked_table_names = [item.table_name for item in result.ranked_tables]
         logger.info(

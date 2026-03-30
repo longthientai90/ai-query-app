@@ -90,6 +90,12 @@ class SchemaQueryRewriter:
         # Give the model a compact catalog instead of raw DDL so it can anchor
         # keyword extraction to real table names without paying a large token cost.
         schema_catalog = self._build_schema_catalog(store)
+        logger.info(
+            "schema_query_rewrite_llm_started query=%r deployment=%s catalog_table_count=%s",
+            query,
+            self.deployment,
+            len(store.tables),
+        )
         messages = [
             {
                 "role": "system",
@@ -141,7 +147,7 @@ class SchemaQueryRewriter:
             if isinstance(keyword, str):
                 llm_tokens.extend(tokenize(keyword))
 
-        return QueryRewriteResult(
+        result = QueryRewriteResult(
             tokens=self._dedupe_tokens(llm_tokens),
             used_llm=bool(llm_tokens),
             # A rewritten token such as "category" is usually a signal that the
@@ -150,6 +156,14 @@ class SchemaQueryRewriter:
                 token in {"category", "brand", "customer", "user"} for token in llm_tokens
             ),
         )
+        logger.info(
+            "schema_query_rewrite_llm_completed query=%r used_llm=%s rewritten_tokens=%s force_expand_relationships=%s",
+            query,
+            result.used_llm,
+            result.tokens,
+            result.force_expand_relationships,
+        )
+        return result
 
     @staticmethod
     def _build_schema_catalog(store: SchemaStore) -> str:
