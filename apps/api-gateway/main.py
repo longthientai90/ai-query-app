@@ -11,6 +11,7 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from agent_core_client import AgentCoreClient
 from api_chat import router as chat_router
+from api_search import router as search_router
 from telemetry import setup_telemetry
 
 if sys.platform == "win32":
@@ -66,6 +67,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 app.include_router(chat_router)
+app.include_router(search_router)
 
 
 if __name__ == "__main__":

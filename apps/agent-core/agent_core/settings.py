@@ -42,6 +42,9 @@ class AgentCoreSettings(BaseSettings):
     AZURE_OPENAI_API_KEY: str | None = None
     AZURE_OPENAI_API_VERSION: str = "2024-10-21"
     AZURE_OPENAI_DEPLOYMENT: str | None = None
+    AZURE_OPENAI_ROUTER_DEPLOYMENT: str | None = None
+    AZURE_OPENAI_SQL_DEPLOYMENT: str | None = None
+    AZURE_OPENAI_SUMMARY_DEPLOYMENT: str | None = None
 
     AGENT_HISTORY_LIMIT: int = 20
     AGENT_MAX_SESSIONS: int = 500
@@ -56,3 +59,15 @@ class AgentCoreSettings(BaseSettings):
         env_file_encoding="utf-8",
         extra="ignore",
     )
+
+    @property
+    def azure_router_deployment(self) -> str | None:
+        return self.AZURE_OPENAI_ROUTER_DEPLOYMENT or self.AZURE_OPENAI_DEPLOYMENT
+
+    @property
+    def azure_sql_deployment(self) -> str | None:
+        return self.AZURE_OPENAI_SQL_DEPLOYMENT or self.AZURE_OPENAI_DEPLOYMENT
+
+    @property
+    def azure_summary_deployment(self) -> str | None:
+        return self.AZURE_OPENAI_SUMMARY_DEPLOYMENT or self.AZURE_OPENAI_DEPLOYMENT

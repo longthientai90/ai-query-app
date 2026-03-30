@@ -27,7 +27,7 @@ class LLMClient:
         self.settings = settings
         self.provider = settings.LLM_PROVIDER.lower()
         self.client: AsyncOpenAI | AsyncAzureOpenAI | None = None
-        self.model: str | None = None
+        self.default_model: str | None = None
 
         if self.provider == "openai":
             if not settings.OPENAI_API_KEY:
@@ -36,30 +36,30 @@ class LLMClient:
                 api_key=settings.OPENAI_API_KEY,
                 base_url=settings.OPENAI_BASE_URL,
             )
-            self.model = settings.OPENAI_MODEL
+            self.default_model = settings.OPENAI_MODEL
         elif self.provider == "azure":
             if not settings.AZURE_OPENAI_ENDPOINT or not settings.AZURE_OPENAI_API_KEY:
                 raise LLMClientError(
                     "AZURE_OPENAI_ENDPOINT and AZURE_OPENAI_API_KEY are required when LLM_PROVIDER=azure"
                 )
-            if not settings.AZURE_OPENAI_DEPLOYMENT:
-                raise LLMClientError("AZURE_OPENAI_DEPLOYMENT is required when LLM_PROVIDER=azure")
+            if not settings.azure_sql_deployment:
+                raise LLMClientError("AZURE_OPENAI_SQL_DEPLOYMENT or AZURE_OPENAI_DEPLOYMENT is required when LLM_PROVIDER=azure")
             self.client = AsyncAzureOpenAI(
                 azure_endpoint=settings.AZURE_OPENAI_ENDPOINT,
                 api_key=settings.AZURE_OPENAI_API_KEY,
                 api_version=settings.AZURE_OPENAI_API_VERSION,
             )
-            self.model = settings.AZURE_OPENAI_DEPLOYMENT
+            self.default_model = settings.azure_sql_deployment
         elif self.provider == "none":
             self.client = None
-            self.model = None
+            self.default_model = None
         else:
             raise LLMClientError(f"Unsupported LLM_PROVIDER: {settings.LLM_PROVIDER}")
 
     @property
     def enabled(self) -> bool:
         """True when a real LLM backend is configured and ready."""
-        return self.client is not None and self.model is not None
+        return self.client is not None and self.default_model is not None
 
     async def route_skill(
         self,
@@ -98,7 +98,7 @@ class LLMClient:
             },
         ]
         with tracer.start_as_current_span("agent.llm.route_skill"):
-            parsed = await self._chat_json(messages=messages, max_tokens=220)
+            parsed = await self._chat_json(messages=messages, max_tokens=220, model=self._model_for_task("router"))
         skill = parsed.get("skill")
         reason = parsed.get("reason", "")
         names = {item.name for item in skills}
@@ -144,7 +144,7 @@ class LLMClient:
             },
         ]
         with tracer.start_as_current_span("agent.llm.generate_sql"):
-            payload = await self._chat_json(messages=messages, max_tokens=600)
+            payload = await self._chat_json(messages=messages, max_tokens=600, model=self._model_for_task("sql"))
         sql = payload.get("sql")
         params = payload.get("params") or []
         reason = payload.get("reason", "")
@@ -207,7 +207,7 @@ class LLMClient:
             },
         ]
         with tracer.start_as_current_span("agent.llm.summarize_answer"):
-            return (await self._chat_text(messages=messages, max_tokens=400)).strip()
+            return (await self._chat_text(messages=messages, max_tokens=400, model=self._model_for_task("summary"))).strip()
 
     def _heuristic_route(self, question: str, skills: list[SkillDefinition]) -> str:
         """Rule-based routing used when LLM is disabled or router output is invalid."""
@@ -277,10 +277,10 @@ class LLMClient:
             return "Khong tim thay du lieu phu hop voi cau hoi."
         return f"Da tim thay {row_count} dong du lieu cho cau hoi: {question}"
 
-    async def _chat_json(self, *, messages: list[dict[str, str]], max_tokens: int) -> dict[str, Any]:
+    async def _chat_json(self, *, messages: list[dict[str, str]], max_tokens: int, model: str | None = None) -> dict[str, Any]:
         """Force JSON mode and parse into a dict."""
         # Route/generate paths depend on machine-readable output, so fail fast on non-JSON text.
-        content = await self._chat_text(messages=messages, max_tokens=max_tokens, json_mode=True)
+        content = await self._chat_text(messages=messages, max_tokens=max_tokens, json_mode=True, model=model)
         try:
             parsed = json.loads(content)
         except json.JSONDecodeError as exc:
@@ -295,19 +295,21 @@ class LLMClient:
         messages: list[dict[str, str]],
         max_tokens: int,
         json_mode: bool = False,
+        model: str | None = None,
     ) -> str:
         """Shared chat completion call used by all LLM interactions."""
-        if not self.enabled or self.client is None or self.model is None:
+        effective_model = model or self.default_model
+        if not self.enabled or self.client is None or effective_model is None:
             raise LLMClientError("LLM client is disabled")
 
         with tracer.start_as_current_span("agent.llm.chat_completion") as span:
             span.set_attribute("llm.provider", self.provider)
-            span.set_attribute("llm.model", self.model)
+            span.set_attribute("llm.model", effective_model)
             span.set_attribute("llm.max_completion_tokens", max_tokens)
             span.set_attribute("llm.response_format_json", json_mode)
 
             kwargs: dict[str, Any] = {
-                "model": self.model,
+                "model": effective_model,
                 "messages": messages,
                 "temperature": 0,
                 "max_completion_tokens": max_tokens,
@@ -326,6 +328,15 @@ class LLMClient:
                 span.set_attribute("error", True)
                 raise LLMClientError("LLM returned empty response")
             return content
+
+    def _model_for_task(self, task: str) -> str | None:
+        if self.provider == "azure":
+            if task == "router":
+                return self.settings.azure_router_deployment
+            if task == "summary":
+                return self.settings.azure_summary_deployment
+            return self.settings.azure_sql_deployment
+        return self.default_model
 
     @staticmethod
     def _compact_rows(rows: list[Any], *, max_rows: int, max_chars: int) -> list[Any]:
