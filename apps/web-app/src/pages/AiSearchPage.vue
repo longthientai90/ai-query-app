@@ -1,7 +1,9 @@
 <script setup>
 import { ref } from "vue";
+import SimpleChart from "../components/ui/SimpleChart.vue";
 import SearchBar from "../components/ui/SearchBar.vue";
 import ResultTable from "../components/ui/ResultTable.vue";
+import { useChartRender } from "../composables/useChartRender";
 import { useChartSuggestions } from "../composables/useChartSuggestions";
 import { useSearch } from "../composables/useSearch";
 
@@ -15,18 +17,31 @@ const {
   suggestCharts,
   reset: resetChartSuggestions,
 } = useChartSuggestions();
+const {
+  isLoading: isRenderingChart,
+  error: chartRenderError,
+  chart: renderedChart,
+  renderChart,
+  reset: resetRenderedChart,
+} = useChartRender();
 const tableResult = ref(null);
 const lastQuestion = ref("");
 const isChartPanelOpen = ref(false);
-const selectedSuggestionType = ref("");
+const selectedSuggestionKey = ref("");
 
 const onSubmit = async (question) => {
   lastQuestion.value = question;
   isChartPanelOpen.value = false;
-  selectedSuggestionType.value = "";
+  selectedSuggestionKey.value = "";
   resetChartSuggestions();
+  resetRenderedChart();
   tableResult.value = await runSearch(question);
 };
+
+const getSuggestionKey = (suggestion) => `${suggestion.type}:${suggestion.x_column}:${suggestion.y_column}`;
+
+const findSelectedSuggestion = () =>
+  chartSuggestions.value.find((suggestion) => getSuggestionKey(suggestion) === selectedSuggestionKey.value) || null;
 
 const onViewChart = async () => {
   if (!tableResult.value) {
@@ -34,15 +49,29 @@ const onViewChart = async () => {
   }
 
   isChartPanelOpen.value = true;
-  selectedSuggestionType.value = "";
+  selectedSuggestionKey.value = "";
+  resetRenderedChart();
   const payload = await suggestCharts({
     question: lastQuestion.value,
     result: tableResult.value,
   });
 
   if (payload?.suggestions?.length) {
-    selectedSuggestionType.value = payload.suggestions[0].type;
+    selectedSuggestionKey.value = getSuggestionKey(payload.suggestions[0]);
   }
+};
+
+const onRenderSelectedChart = async () => {
+  const selectedSuggestion = findSelectedSuggestion();
+  if (!selectedSuggestion || !tableResult.value) {
+    return;
+  }
+
+  await renderChart({
+    question: lastQuestion.value,
+    result: tableResult.value,
+    suggestion: selectedSuggestion,
+  });
 };
 </script>
 
@@ -136,15 +165,15 @@ const onViewChart = async () => {
           >
             <button
               v-for="suggestion in chartSuggestions"
-              :key="`${suggestion.type}-${suggestion.x_column}-${suggestion.y_column}`"
+              :key="getSuggestionKey(suggestion)"
               type="button"
               class="rounded-3xl border p-5 text-left transition"
               :class="
-                selectedSuggestionType === suggestion.type
+                selectedSuggestionKey === getSuggestionKey(suggestion)
                   ? 'border-brand-400 bg-brand-50/80 shadow-sm'
                   : 'border-slate-200/80 bg-white hover:border-brand-300 hover:bg-brand-50/40'
               "
-              @click="selectedSuggestionType = suggestion.type"
+              @click="selectedSuggestionKey = getSuggestionKey(suggestion)"
             >
               <div class="flex items-center justify-between gap-3">
                 <h3 class="font-heading text-xl font-semibold text-slate-900">{{ suggestion.title }}</h3>
@@ -159,11 +188,36 @@ const onViewChart = async () => {
             </button>
           </div>
 
+          <div v-if="chartSuggestions.length" class="mt-5 flex flex-wrap items-center gap-3">
+            <button
+              type="button"
+              class="rounded-2xl bg-slate-900 px-5 py-2.5 text-sm font-semibold text-white transition hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-50"
+              :disabled="!selectedSuggestionKey || isRenderingChart"
+              @click="onRenderSelectedChart"
+            >
+              {{ isRenderingChart ? "Rendering Chart..." : "Render Selected Chart" }}
+            </button>
+            <p class="text-sm text-slate-500">
+              This uses a mock backend renderer for now. MCP rendering comes in the next step.
+            </p>
+          </div>
+
           <div
             v-else
             class="mt-5 rounded-2xl border border-dashed border-slate-300 bg-slate-50 px-4 py-6 text-center text-sm text-slate-500"
           >
             {{ canChart ? "No chart options returned." : "This result is not suitable for a chart suggestion yet." }}
+          </div>
+
+          <p
+            v-if="chartRenderError"
+            class="mt-5 rounded-2xl border border-red-300 bg-red-50 px-4 py-3 text-sm font-medium text-red-700"
+          >
+            {{ chartRenderError }}
+          </p>
+
+          <div v-if="renderedChart" class="mt-6">
+            <SimpleChart :chart="renderedChart" />
           </div>
         </section>
       </transition>

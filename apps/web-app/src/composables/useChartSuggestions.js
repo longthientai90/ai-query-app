@@ -2,6 +2,7 @@ import { ref } from "vue";
 
 const DEFAULT_SUGGEST_API_URL = "http://localhost:8080/api/chart/suggest";
 const SUGGEST_API_URL = import.meta.env.VITE_CHART_SUGGEST_API_URL || DEFAULT_SUGGEST_API_URL;
+const MAX_SAMPLE_ROWS = 20;
 
 export function useChartSuggestions() {
   const isLoading = ref(false);
@@ -12,7 +13,7 @@ export function useChartSuggestions() {
 
   const suggestCharts = async ({ question, result }) => {
     const columns = Array.isArray(result?.columns) ? result.columns : [];
-    const rows = Array.isArray(result?.rows) ? result.rows : [];
+    const rows = Array.isArray(result?.rows) ? result.rows.slice(0, MAX_SAMPLE_ROWS) : [];
     const rowCount = Number.isFinite(result?.rowCount) ? result.rowCount : rows.length;
 
     if (!question?.trim() || !columns.length || !rows.length) {

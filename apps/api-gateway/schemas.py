@@ -58,3 +58,26 @@ class ChartSuggestResponse(BaseModel):
     can_chart: bool
     summary: str
     suggestions: list[ChartSuggestion] = Field(default_factory=list)
+
+
+class ChartRenderRequest(BaseModel):
+    question: str = Field(min_length=1)
+    chart_type: str = Field(min_length=1)
+    x_column: str = Field(min_length=1)
+    y_column: str = Field(min_length=1)
+    columns: list[str] = Field(default_factory=list)
+    rows: list[dict[str, Any]] = Field(default_factory=list)
+
+
+class ChartSeriesPoint(BaseModel):
+    label: str
+    value: float
+
+
+class ChartRenderResponse(BaseModel):
+    chart_type: str
+    title: str
+    x_column: str
+    y_column: str
+    summary: str
+    points: list[ChartSeriesPoint] = Field(default_factory=list)

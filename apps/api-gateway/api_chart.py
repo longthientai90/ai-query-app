@@ -5,7 +5,16 @@ from typing import Any
 
 from fastapi import APIRouter
 
-from schemas import ChartSuggestRequest, ChartSuggestResponse, ChartSuggestion
+from fastapi import HTTPException
+
+from schemas import (
+    ChartRenderRequest,
+    ChartRenderResponse,
+    ChartSeriesPoint,
+    ChartSuggestRequest,
+    ChartSuggestResponse,
+    ChartSuggestion,
+)
 
 router = APIRouter(prefix="/api/chart", tags=["chart"])
 
@@ -70,6 +79,28 @@ async def suggest_chart(payload: ChartSuggestRequest) -> ChartSuggestResponse:
     )
 
 
+@router.post("/render", response_model=ChartRenderResponse)
+async def render_chart(payload: ChartRenderRequest) -> ChartRenderResponse:
+    chart_type = payload.chart_type.strip().lower()
+    if chart_type not in {"bar", "line"}:
+        raise HTTPException(status_code=400, detail="Only bar and line charts are supported right now.")
+
+    rows = payload.rows[:MAX_SAMPLE_ROWS]
+    points = build_chart_points(rows, payload.x_column, payload.y_column)
+    if not points:
+        raise HTTPException(status_code=400, detail="Not enough usable rows to render this chart.")
+
+    title_connector = "over" if chart_type == "line" else "by"
+    return ChartRenderResponse(
+        chart_type=chart_type,
+        title=f"{format_label(payload.y_column)} {title_connector} {format_label(payload.x_column)}",
+        x_column=payload.x_column,
+        y_column=payload.y_column,
+        summary=f"Rendered {len(points)} point(s) from the current table using a mock chart renderer.",
+        points=points,
+    )
+
+
 def analyze_columns(columns: list[str], rows: list[dict[str, Any]]) -> list[dict[str, str]]:
     analysis: list[dict[str, str]] = []
     for column in columns:
@@ -77,6 +108,26 @@ def analyze_columns(columns: list[str], rows: list[dict[str, Any]]) -> list[dict
         kind = infer_column_kind(column, values)
         analysis.append({"name": column, "kind": kind})
     return analysis
+
+
+def build_chart_points(rows: list[dict[str, Any]], x_column: str, y_column: str) -> list[ChartSeriesPoint]:
+    points: list[ChartSeriesPoint] = []
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+
+        label_value = row.get(x_column)
+        numeric_value = to_number(row.get(y_column))
+        if numeric_value is None:
+            continue
+
+        label = str(label_value).strip() if label_value is not None else ""
+        if not label:
+            continue
+
+        points.append(ChartSeriesPoint(label=label, value=numeric_value))
+
+    return points
 
 
 def infer_column_kind(column_name: str, values: list[Any]) -> str:
