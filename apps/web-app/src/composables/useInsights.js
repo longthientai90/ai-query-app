@@ -33,19 +33,10 @@ function persistMetrics(nextMetrics) {
   window.localStorage.setItem(STORAGE_KEY, JSON.stringify(nextMetrics));
 }
 
-function formatQuestionPreview(question) {
-  const trimmedQuestion = String(question || "").trim();
-  if (trimmedQuestion.length <= 120) {
-    return trimmedQuestion;
-  }
-
-  return `${trimmedQuestion.slice(0, 117)}...`;
-}
-
 export function recordSearchMetric({ question, rowCount, durationMs, status, errorMessage = "" }) {
   const nextEntry = {
     id: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
-    question: formatQuestionPreview(question),
+    question: String(question || "").trim(),
     rowCount: Number.isFinite(rowCount) ? rowCount : 0,
     durationMs: Number.isFinite(durationMs) ? durationMs : null,
     status: status === "error" ? "error" : "success",

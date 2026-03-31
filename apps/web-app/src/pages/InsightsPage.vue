@@ -116,7 +116,7 @@ const formatTime = (isoString) => {
                 >
                   <td class="px-5 py-4 text-slate-500">{{ formatTime(entry.createdAt) }}</td>
                   <td class="px-5 py-4">
-                    <p class="font-medium text-slate-900">{{ entry.question }}</p>
+                    <p class="whitespace-pre-wrap break-words font-medium text-slate-900">{{ entry.question }}</p>
                     <p v-if="entry.errorMessage" class="mt-1 text-xs text-red-600">{{ entry.errorMessage }}</p>
                   </td>
                   <td class="px-5 py-4">
