@@ -13,6 +13,8 @@ from agent_core_client import AgentCoreClient
 from api_chat import router as chat_router
 from api_chart import router as chart_router
 from api_search import router as search_router
+from chart_llm_service import ChartLLMService
+from chart_mcp_service import ChartMCPService
 from telemetry import setup_telemetry
 
 if sys.platform == "win32":
@@ -51,10 +53,16 @@ async def lifespan(app: FastAPI):
         handle_path=settings.AGENT_CORE_HANDLE_PATH,
         timeout_sec=settings.AGENT_CORE_TIMEOUT_SEC,
     )
+    chart_llm_service = ChartLLMService()
+    chart_mcp_service = ChartMCPService()
     app.state.agent_core_client = client
+    app.state.chart_llm_service = chart_llm_service
+    app.state.chart_mcp_service = chart_mcp_service
     try:
+        await chart_mcp_service.start()
         yield
     finally:
+        await chart_mcp_service.stop()
         await client.close()
 
 

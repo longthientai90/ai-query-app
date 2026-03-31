@@ -198,7 +198,7 @@ const onRenderSelectedChart = async () => {
               {{ isRenderingChart ? "Rendering Chart..." : "Render Selected Chart" }}
             </button>
             <p class="text-sm text-slate-500">
-              This uses a mock backend renderer for now. MCP rendering comes in the next step.
+              Azure OpenAI selects the chart option and Chart.js MCP renders the final chart.
             </p>
           </div>
 
@@ -216,8 +216,20 @@ const onRenderSelectedChart = async () => {
             {{ chartRenderError }}
           </p>
 
-          <div v-if="renderedChart" class="mt-6">
-            <SimpleChart :chart="renderedChart" />
+          <div v-if="renderedChart" class="mt-6 space-y-4">
+            <div
+              v-if="renderedChart.html_snippet"
+              class="overflow-hidden rounded-3xl border border-slate-200/80 bg-white shadow-sm"
+            >
+              <iframe
+                :srcdoc="renderedChart.html_snippet"
+                title="Rendered Chart"
+                class="h-[560px] w-full border-0"
+                sandbox="allow-scripts"
+                referrerpolicy="no-referrer"
+              />
+            </div>
+            <SimpleChart v-else :chart="renderedChart" />
           </div>
         </section>
       </transition>

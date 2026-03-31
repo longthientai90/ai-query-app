@@ -2,7 +2,7 @@ import { ref } from "vue";
 
 const DEFAULT_RENDER_API_URL = "http://localhost:8080/api/chart/render";
 const RENDER_API_URL = import.meta.env.VITE_CHART_RENDER_API_URL || DEFAULT_RENDER_API_URL;
-const MAX_SAMPLE_ROWS = 20;
+const MAX_SAMPLE_ROWS = 100;
 
 export function useChartRender() {
   const isLoading = ref(false);

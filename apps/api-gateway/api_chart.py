@@ -3,9 +3,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Any
 
-from fastapi import APIRouter
-
-from fastapi import HTTPException
+from fastapi import APIRouter, HTTPException, Request
 
 from schemas import (
     ChartRenderRequest,
@@ -19,14 +17,92 @@ from schemas import (
 router = APIRouter(prefix="/api/chart", tags=["chart"])
 
 MAX_SAMPLE_ROWS = 20
+MAX_RENDER_ROWS = 100
 
 
 @router.post("/suggest", response_model=ChartSuggestResponse)
-async def suggest_chart(payload: ChartSuggestRequest) -> ChartSuggestResponse:
+async def suggest_chart(payload: ChartSuggestRequest, request: Request) -> ChartSuggestResponse:
     columns = [column for column in payload.columns if isinstance(column, str) and column.strip()]
     sample_rows = payload.rows[:MAX_SAMPLE_ROWS]
-    analysis = analyze_columns(columns, sample_rows)
+    heuristic_suggestions = build_heuristic_suggestions(columns, sample_rows)
+    fallback_summary: str | None = None
 
+    llm_service = getattr(request.app.state, "chart_llm_service", None)
+    if llm_service is not None:
+        try:
+            can_chart, summary, suggestions = await llm_service.suggest_chart(
+                question=payload.question,
+                columns=columns,
+                rows=sample_rows,
+                heuristic_suggestions=heuristic_suggestions,
+            )
+            return ChartSuggestResponse(can_chart=can_chart, summary=summary, suggestions=suggestions)
+        except Exception as exc:
+            fallback_summary = f"Azure chart suggestion unavailable. Falling back to rule-based suggestions. ({exc})"
+
+    if heuristic_suggestions:
+        summary = fallback_summary or (
+            f"Found {len(heuristic_suggestions)} chart option(s) from the returned table based on column types and sample values."
+        )
+        return ChartSuggestResponse(can_chart=True, summary=summary, suggestions=heuristic_suggestions)
+
+    return ChartSuggestResponse(
+        can_chart=False,
+        summary=fallback_summary or "This table looks more like detailed records than chart-friendly grouped data.",
+        suggestions=[],
+    )
+
+
+@router.post("/render", response_model=ChartRenderResponse)
+async def render_chart(payload: ChartRenderRequest, request: Request) -> ChartRenderResponse:
+    chart_type = payload.chart_type.strip().lower()
+    if chart_type not in {"bar", "line"}:
+        raise HTTPException(status_code=400, detail="Only bar and line charts are supported right now.")
+
+    rows = payload.rows[:MAX_RENDER_ROWS]
+    points = build_chart_points(rows, payload.x_column, payload.y_column)
+    if not points:
+        raise HTTPException(status_code=400, detail="Not enough usable rows to render this chart.")
+
+    title_connector = "over" if chart_type == "line" else "by"
+    chart_config = build_chartjs_config(
+        chart_type=chart_type,
+        title=f"{format_label(payload.y_column)} {title_connector} {format_label(payload.x_column)}",
+        x_column=payload.x_column,
+        y_column=payload.y_column,
+        points=points,
+    )
+
+    chart_mcp_service = getattr(request.app.state, "chart_mcp_service", None)
+    html_snippet: str | None = None
+    if chart_mcp_service is not None:
+        try:
+            html_snippet = await chart_mcp_service.render_chart_html(chart_config=chart_config)
+        except Exception as exc:
+            raise HTTPException(status_code=502, detail=f"Chart MCP render failed: {exc}") from exc
+
+    return ChartRenderResponse(
+        chart_type=chart_type,
+        title=f"{format_label(payload.y_column)} {title_connector} {format_label(payload.x_column)}",
+        x_column=payload.x_column,
+        y_column=payload.y_column,
+        summary=f"Rendered {len(points)} point(s) using Azure-guided suggestion and Chart.js MCP rendering.",
+        html_snippet=html_snippet,
+        points=points,
+    )
+
+
+def analyze_columns(columns: list[str], rows: list[dict[str, Any]]) -> list[dict[str, str]]:
+    analysis: list[dict[str, str]] = []
+    for column in columns:
+        values = [row.get(column) for row in rows if isinstance(row, dict) and column in row]
+        kind = infer_column_kind(column, values)
+        analysis.append({"name": column, "kind": kind})
+    return analysis
+
+
+def build_heuristic_suggestions(columns: list[str], rows: list[dict[str, Any]]) -> list[ChartSuggestion]:
+    analysis = analyze_columns(columns, rows)
     numeric_columns = [item["name"] for item in analysis if item["kind"] == "numeric"]
     time_columns = [item["name"] for item in analysis if item["kind"] == "time"]
     categorical_columns = [item["name"] for item in analysis if item["kind"] == "categorical"]
@@ -66,48 +142,7 @@ async def suggest_chart(payload: ChartSuggestRequest) -> ChartSuggestResponse:
                 )
             )
 
-    if suggestions:
-        summary = (
-            f"Found {len(suggestions)} chart option(s) from the returned table based on column types and sample values."
-        )
-        return ChartSuggestResponse(can_chart=True, summary=summary, suggestions=suggestions)
-
-    return ChartSuggestResponse(
-        can_chart=False,
-        summary="This table looks more like detailed records than chart-friendly grouped data.",
-        suggestions=[],
-    )
-
-
-@router.post("/render", response_model=ChartRenderResponse)
-async def render_chart(payload: ChartRenderRequest) -> ChartRenderResponse:
-    chart_type = payload.chart_type.strip().lower()
-    if chart_type not in {"bar", "line"}:
-        raise HTTPException(status_code=400, detail="Only bar and line charts are supported right now.")
-
-    rows = payload.rows[:MAX_SAMPLE_ROWS]
-    points = build_chart_points(rows, payload.x_column, payload.y_column)
-    if not points:
-        raise HTTPException(status_code=400, detail="Not enough usable rows to render this chart.")
-
-    title_connector = "over" if chart_type == "line" else "by"
-    return ChartRenderResponse(
-        chart_type=chart_type,
-        title=f"{format_label(payload.y_column)} {title_connector} {format_label(payload.x_column)}",
-        x_column=payload.x_column,
-        y_column=payload.y_column,
-        summary=f"Rendered {len(points)} point(s) from the current table using a mock chart renderer.",
-        points=points,
-    )
-
-
-def analyze_columns(columns: list[str], rows: list[dict[str, Any]]) -> list[dict[str, str]]:
-    analysis: list[dict[str, str]] = []
-    for column in columns:
-        values = [row.get(column) for row in rows if isinstance(row, dict) and column in row]
-        kind = infer_column_kind(column, values)
-        analysis.append({"name": column, "kind": kind})
-    return analysis
+    return suggestions
 
 
 def build_chart_points(rows: list[dict[str, Any]], x_column: str, y_column: str) -> list[ChartSeriesPoint]:
@@ -126,6 +161,83 @@ def build_chart_points(rows: list[dict[str, Any]], x_column: str, y_column: str)
             continue
 
         points.append(ChartSeriesPoint(label=label, value=numeric_value))
+
+    return points
+
+
+def build_chartjs_config(
+    *,
+    chart_type: str,
+    title: str,
+    x_column: str,
+    y_column: str,
+    points: list[ChartSeriesPoint],
+) -> dict[str, Any]:
+    if chart_type == "line":
+        sorted_points = sort_chart_points(points)
+    else:
+        sorted_points = points
+
+    labels = [point.label for point in sorted_points]
+    values = [point.value for point in sorted_points]
+
+    return {
+        "type": chart_type,
+        "data": {
+            "labels": labels,
+            "datasets": [
+                {
+                    "label": format_label(y_column),
+                    "data": values,
+                    "backgroundColor": "rgba(20, 184, 166, 0.78)",
+                    "borderColor": "rgba(15, 118, 110, 1)",
+                    "borderWidth": 2,
+                    "fill": False,
+                    "tension": 0.25,
+                }
+            ],
+        },
+        "options": {
+            "responsive": True,
+            "plugins": {
+                "title": {
+                    "display": True,
+                    "text": title,
+                },
+                "legend": {
+                    "display": True,
+                },
+            },
+            "scales": {
+                "x": {
+                    "title": {
+                        "display": True,
+                        "text": format_label(x_column),
+                    }
+                },
+                "y": {
+                    "beginAtZero": True,
+                    "title": {
+                        "display": True,
+                        "text": format_label(y_column),
+                    }
+                },
+            },
+        },
+    }
+
+
+def sort_chart_points(points: list[ChartSeriesPoint]) -> list[ChartSeriesPoint]:
+    if len(points) < 2:
+        return points
+
+    time_values = [parse_time_like_label(point.label) for point in points]
+    if all(value is not None for value in time_values):
+        return [point for _, point in sorted(zip(time_values, points), key=lambda item: item[0])]
+
+    numeric_values = [to_number(point.label) for point in points]
+    if all(value is not None for value in numeric_values):
+        return [point for _, point in sorted(zip(numeric_values, points), key=lambda item: item[0])]
 
     return points
 
@@ -175,14 +287,18 @@ def to_number(value: Any) -> float | None:
 
 
 def is_time_like(value: Any) -> bool:
+    return parse_time_like_label(value) is not None
+
+
+def parse_time_like_label(value: Any) -> datetime | None:
     if isinstance(value, datetime):
-        return True
+        return value
     if not isinstance(value, str):
-        return False
+        return None
 
     candidate = value.strip()
     if not candidate:
-        return False
+        return None
 
     normalized_candidate = candidate.replace("Z", "+00:00")
     formats = (
@@ -198,16 +314,14 @@ def is_time_like(value: Any) -> bool:
 
     for date_format in formats:
         try:
-            datetime.strptime(candidate, date_format)
-            return True
+            return datetime.strptime(candidate, date_format)
         except ValueError:
             continue
 
     try:
-        datetime.fromisoformat(normalized_candidate)
-        return True
+        return datetime.fromisoformat(normalized_candidate)
     except ValueError:
-        return False
+        return None
 
 
 def format_label(value: str) -> str:

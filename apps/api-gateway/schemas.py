@@ -80,4 +80,5 @@ class ChartRenderResponse(BaseModel):
     x_column: str
     y_column: str
     summary: str
+    html_snippet: str | None = None
     points: list[ChartSeriesPoint] = Field(default_factory=list)
