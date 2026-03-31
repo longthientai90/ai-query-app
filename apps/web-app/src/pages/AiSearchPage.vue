@@ -2,13 +2,47 @@
 import { ref } from "vue";
 import SearchBar from "../components/ui/SearchBar.vue";
 import ResultTable from "../components/ui/ResultTable.vue";
+import { useChartSuggestions } from "../composables/useChartSuggestions";
 import { useSearch } from "../composables/useSearch";
 
 const { isSearching, error, runSearch } = useSearch();
+const {
+  isLoading: isSuggestingChart,
+  error: chartSuggestionError,
+  suggestions: chartSuggestions,
+  summary: chartSummary,
+  canChart,
+  suggestCharts,
+  reset: resetChartSuggestions,
+} = useChartSuggestions();
 const tableResult = ref(null);
+const lastQuestion = ref("");
+const isChartPanelOpen = ref(false);
+const selectedSuggestionType = ref("");
 
 const onSubmit = async (question) => {
+  lastQuestion.value = question;
+  isChartPanelOpen.value = false;
+  selectedSuggestionType.value = "";
+  resetChartSuggestions();
   tableResult.value = await runSearch(question);
+};
+
+const onViewChart = async () => {
+  if (!tableResult.value) {
+    return;
+  }
+
+  isChartPanelOpen.value = true;
+  selectedSuggestionType.value = "";
+  const payload = await suggestCharts({
+    question: lastQuestion.value,
+    result: tableResult.value,
+  });
+
+  if (payload?.suggestions?.length) {
+    selectedSuggestionType.value = payload.suggestions[0].type;
+  }
 };
 </script>
 
@@ -52,7 +86,86 @@ const onSubmit = async (question) => {
           :result="tableResult"
           :loading="isSearching"
           class="mt-6"
+          @view-chart="onViewChart"
         />
+      </transition>
+
+      <transition name="fade-up">
+        <section
+          v-if="isChartPanelOpen"
+          class="mt-6 rounded-3xl border border-white/70 bg-white/80 p-6 shadow-card backdrop-blur-xl"
+        >
+          <div class="flex flex-wrap items-start justify-between gap-4">
+            <div>
+              <p
+                class="inline-flex rounded-full border border-amber-200 bg-amber-50 px-3 py-1 text-xs font-semibold uppercase tracking-[0.18em] text-amber-700"
+              >
+                Chart Suggestions
+              </p>
+              <h2 class="mt-3 font-heading text-2xl font-semibold text-slate-900">Suggested Charts</h2>
+              <p class="mt-2 max-w-2xl text-sm text-slate-600">
+                {{ chartSummary || "Check which chart types fit the returned table before rendering a chart." }}
+              </p>
+            </div>
+            <button
+              type="button"
+              class="rounded-2xl border border-slate-300 bg-white px-4 py-2 text-sm font-semibold text-slate-700 transition hover:border-slate-400 hover:text-slate-900"
+              @click="isChartPanelOpen = false"
+            >
+              Close
+            </button>
+          </div>
+
+          <div
+            v-if="isSuggestingChart"
+            class="mt-5 rounded-2xl border border-slate-200/80 bg-slate-50 px-4 py-5 text-sm text-slate-600"
+          >
+            Analyzing table columns to suggest chart types...
+          </div>
+
+          <p
+            v-else-if="chartSuggestionError"
+            class="mt-5 rounded-2xl border border-red-300 bg-red-50 px-4 py-3 text-sm font-medium text-red-700"
+          >
+            {{ chartSuggestionError }}
+          </p>
+
+          <div
+            v-else-if="chartSuggestions.length"
+            class="mt-5 grid gap-4 md:grid-cols-2"
+          >
+            <button
+              v-for="suggestion in chartSuggestions"
+              :key="`${suggestion.type}-${suggestion.x_column}-${suggestion.y_column}`"
+              type="button"
+              class="rounded-3xl border p-5 text-left transition"
+              :class="
+                selectedSuggestionType === suggestion.type
+                  ? 'border-brand-400 bg-brand-50/80 shadow-sm'
+                  : 'border-slate-200/80 bg-white hover:border-brand-300 hover:bg-brand-50/40'
+              "
+              @click="selectedSuggestionType = suggestion.type"
+            >
+              <div class="flex items-center justify-between gap-3">
+                <h3 class="font-heading text-xl font-semibold text-slate-900">{{ suggestion.title }}</h3>
+                <span class="rounded-full bg-slate-900 px-3 py-1 text-xs font-semibold uppercase tracking-wide text-white">
+                  {{ suggestion.type }}
+                </span>
+              </div>
+              <p class="mt-3 text-sm text-slate-600">{{ suggestion.reason }}</p>
+              <p class="mt-4 text-xs font-medium uppercase tracking-[0.18em] text-slate-500">
+                X: {{ suggestion.x_column }} | Y: {{ suggestion.y_column }}
+              </p>
+            </button>
+          </div>
+
+          <div
+            v-else
+            class="mt-5 rounded-2xl border border-dashed border-slate-300 bg-slate-50 px-4 py-6 text-center text-sm text-slate-500"
+          >
+            {{ canChart ? "No chart options returned." : "This result is not suitable for a chart suggestion yet." }}
+          </div>
+        </section>
       </transition>
 
       <transition name="fade-up">

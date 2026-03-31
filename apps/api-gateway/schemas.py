@@ -37,3 +37,24 @@ class SearchResponse(BaseModel):
     params: list[Any] | None = None
     result: dict[str, Any] | None = None
     router_reason: str | None = None
+
+
+class ChartSuggestRequest(BaseModel):
+    question: str = Field(min_length=1)
+    columns: list[str] = Field(default_factory=list)
+    rows: list[dict[str, Any]] = Field(default_factory=list)
+    row_count: int | None = Field(default=None, ge=0)
+
+
+class ChartSuggestion(BaseModel):
+    type: str
+    title: str
+    reason: str
+    x_column: str
+    y_column: str
+
+
+class ChartSuggestResponse(BaseModel):
+    can_chart: bool
+    summary: str
+    suggestions: list[ChartSuggestion] = Field(default_factory=list)

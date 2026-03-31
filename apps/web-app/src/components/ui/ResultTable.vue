@@ -12,6 +12,8 @@ const props = defineProps({
   },
 });
 
+const emit = defineEmits(["view-chart"]);
+
 const allRows = ref([]);
 const sortKey = ref("");
 const sortDirection = ref("asc");
@@ -160,9 +162,18 @@ const durationText = computed(() => {
   <section class="animate-rise rounded-3xl border border-white/70 bg-white/75 p-5 shadow-card backdrop-blur-xl sm:p-6">
     <div class="mb-4 flex flex-wrap items-center justify-between gap-2">
       <h2 class="font-heading text-xl font-semibold text-slate-800">Query Result</h2>
-      <p class="rounded-full bg-brand-50 px-3 py-1 text-sm font-medium text-brand-800">
-        {{ totalResultRows }} rows | {{ durationText }} ms
-      </p>
+      <div class="flex flex-wrap items-center gap-2">
+        <button
+          type="button"
+          class="rounded-full border border-slate-300 bg-white px-4 py-2 text-sm font-semibold text-slate-700 transition hover:border-brand-400 hover:text-brand-700"
+          @click="emit('view-chart')"
+        >
+          View Chart
+        </button>
+        <p class="rounded-full bg-brand-50 px-3 py-1 text-sm font-medium text-brand-800">
+          {{ totalResultRows }} rows | {{ durationText }} ms
+        </p>
+      </div>
     </div>
 
     <div class="mb-4 flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-slate-200/70 bg-white/80 px-3 py-2">
